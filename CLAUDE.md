@@ -12,17 +12,14 @@
 
 ## What this project is
 
-<!-- SETUP: Replace this section with the actual project description. -->
-<!-- See SETUP.md for instructions. -->
-
-[PROJECT_NAME] is [one-sentence description].
+llm_agents_system is a Python platform for building and orchestrating LLM-based agent systems: model hub (OpenAI/HuggingFace/GGUF via llama.cpp/vLLM), data ingestion, RAG, agent capabilities (memory, planning, tools, hierarchy), serving, fine-tuning, and evaluation.
 
 | Field | Value |
 |---|---|
-| Primary language | [e.g. C++20 / Python / TypeScript] |
-| Bindings | [e.g. Python (pybind11) — part of the public API / none] |
-| Build | [e.g. CMake + presets / npm / cargo] |
-| Toolchain | [e.g. Visual Studio / GCC / Clang] |
+| Primary language | Python 3.12+ |
+| Bindings | none |
+| Build | uv (pyproject.toml); heavy integrations behind optional extras |
+| Toolchain | CPython 3.12+, ruff, pytest |
 | MCP tools | see `.cursor/mcp/registry.md` |
 
 ---
@@ -66,9 +63,9 @@ Available roles:
 | Spec writer | `.cursor/agents/spec-writer.md` | Plan is approved by developer |
 | Test designer | `.cursor/agents/test-designer.md` | Spec is written |
 | Environment | `.cursor/agents/environment.md` | Spec and test criteria are approved |
-| Impl: C++ | `.cursor/agents/implementer-cpp.md` | Environment is ready, task requires C++ |
-| Impl: Python | `.cursor/agents/implementer-python.md` | Environment is ready, task requires Python |
-| Impl: ML | `.cursor/agents/implementer-ml.md` | Environment is ready, task requires ML |
+| Impl: Python | `.cursor/agents/implementer-python.md` | Environment is ready (primary implementer — this is a Python project) |
+| Impl: ML | `.cursor/agents/implementer-ml.md` | Environment is ready, task requires ML (fine-tuning, local inference, embeddings, RAG models) |
+| Impl: C++ | _inactive_ — moved to `.cursor/_unused/` | Not applicable (no C++ in this project) |
 | Analyst: Code | `.cursor/agents/analyst-code.md` | CP2 approved, implementer type is `code-analyst` — task reads code and produces markdown artifacts only; Phases 3–4 and Reviewer+Tester loop are skipped |
 | Reviewer | `.cursor/agents/reviewer.md` | Implementation is ready for review |
 | Tester | `.cursor/agents/tester.md` | Implementation passes Reviewer |

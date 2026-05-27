@@ -21,43 +21,40 @@ Running from a subdirectory causes silent path resolution failures.
 
 ## Build tool rules
 
-<!-- SETUP: Replace with actual build tool (cmake, npm, cargo, make, etc.). -->
+Build tool: uv (pure-Python project, no compilation step).
 
-- Use presets or configurations defined in the project — do not invent ad-hoc configurations.
-- Build specific targets — do not build everything when only one target changed.
-- Never modify build configuration files to work around a build issue without developer approval.
-- Never modify files fetched by a dependency manager — see `rules/no-deps-touch.md`.
+- Manage dependencies through `pyproject.toml` + uv — do not invent ad-hoc environments.
+- Use `uv sync` to install; `uv add` to add dependencies. Do not pip-install into the venv directly.
+- Never modify `pyproject.toml`/`uv.lock` to work around an issue without developer approval.
+- Never modify files fetched by uv (the venv / site-packages) — see `rules/no-deps-touch.md`.
 
 ### Standard build sequence
 
 ```bash
 # From project root — always:
-<configure command>
-<build command> --target <target>
-<test command>
+uv sync
+uv run ruff check .
+uv run pytest
 ```
 
 ---
 
 ## Target naming
 
-Verify actual target names in build configuration before using them.
-Do not guess. See `memory/project/build.md` for authoritative names.
+No compiled targets — pure Python. The package is `llm_agents`; tests live in `tests/`.
+See `memory/project/build.md` for authoritative facts.
 
 ---
 
 ## Impact matrix
 
-When changing a component — which targets must be rebuilt and verified:
+When changing a component — which checks must be run and verified:
 
-<!-- SETUP: Fill in the project-specific impact matrix. -->
-<!-- Example structure: -->
-
-| Change | core library | tests | bindings | examples |
-|---|---|---|---|---|
-| Internal impl | build | build + run | — | build |
-| Public header | build | build + run | build + verify | build + run |
-| Bindings layer | — | — | build + verify | build + run |
+| Change | package (llm_agents) | tests |
+|---|---|---|
+| Subsystem implementation | import-check | run affected tests |
+| Public `__init__` export | import-check | run dependent tests |
+| Dependency change (pyproject) | uv sync | run full suite |
 
 ---
 

@@ -1,0 +1,20 @@
+# Default runtime configuration.
+# Override any value with an environment variable prefixed LLM_AGENTS_,
+# e.g. LLM_AGENTS_LOG_LEVEL=DEBUG. See src/llm_agents/config.py.
+
+environment: dev
+log_level: INFO
+
+# Reproducibility: fixed seed for non-LLM randomness (sampling, shuffling).
+# LLM outputs remain non-deterministic; reproducibility comes from recorded traces.
+seed: 0
+
+observability:
+  tracing_enabled: true
+  metrics_enabled: true
+  otlp_endpoint: http://localhost:4317
+
+# Inference routing: ordered provider/model preferences (placeholder).
+inference_routing:
+  default_model: ""
+  fallbacks: []

@@ -2,12 +2,12 @@
 # File: .cursor/rules/determinism.md
 # Applied by: Test designer, Tester, Implementer, Architect, Reviewer
 
-> Determinism requirements for decision logic in this project.
-> These rules are invariants — violations are [ERROR] in all reviews.
->
-> [SETUP] Keep this file if determinism is a requirement for your project.
-> Remove it (and references to it) if your project does not require deterministic behavior.
-> Update the RNG section to name the actual centralized RNG provider in your project.
+> [WARNING] Strict output determinism is NOT a hard invariant for this project.
+> LLM responses are non-deterministic by nature. Reproducibility is achieved by
+> recording and replaying run traces (see the replay_analysis subsystem), not by
+> enforcing bit-identical outputs. The rules below apply only to internal, non-LLM
+> logic (e.g. plan ordering, tool dispatch) that should behave deterministically given
+> the same inputs. Do not assert exact-match equality on LLM outputs in tests.
 
 ---
 

@@ -2,7 +2,7 @@
 # File: .cursor/rules/python.md
 # Applied by: Implementer: Python, Reviewer
 
-> [SETUP] Update the import module name and test paths to match your project.
+> Primary-language rules for this pure-Python project.
 
 ---
 
@@ -27,21 +27,16 @@
 
 ## Import rules
 
-<!-- SETUP: Replace <module_name> with the actual importable module name. -->
-
-- `import <module_name>` — always import the full module
-- Do not import internal symbols directly
+- `import llm_agents` (or a subpackage, e.g. `from llm_agents import planning`)
+- Import from a subpackage's public surface (its `__init__`), not deep internal modules
 - If module import fails — do not proceed, surface to developer
 
 ---
 
 ## Example rules
 
-<!-- SETUP: Update the example path to match your project. -->
-
 - Example scripts are for debugging and integration demonstration
-- Examples must remain runnable after any binding change
-- Integration examples must use real usage sequences — do not simplify or reorder commands
+- Integration examples must use real agent/tool usage sequences — do not simplify or reorder calls
 
 ---
 
@@ -49,8 +44,8 @@
 
 | Pattern | Why forbidden |
 |---|---|
-| Business logic in examples that belongs in C++ | Wrong layer |
-| `from <module> import *` | Pollutes namespace, hides what is used |
+| `from llm_agents import *` | Pollutes namespace, hides what is used |
 | Catching bare `except:` | Hides real errors |
-| `time.sleep()` in tests | Non-deterministic — use explicit state |
-| Modifying test to make it pass | Fix binding or C++ implementation |
+| `time.sleep()` in tests | Flaky — use explicit state or mocked clocks |
+| Real network calls to LLM providers in unit tests | Slow, flaky, costs tokens — mock the provider boundary |
+| Modifying a test to make it pass | Fix the implementation instead |

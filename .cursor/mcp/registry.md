@@ -12,8 +12,11 @@
 
 | Name | File | Purpose | Use when |
 |---|---|---|---|
-| Serena | `.cursor/mcp/serena.md` | Structural code analysis: symbol discovery, reference search, pattern search | Searching for symbols, call sites, references, bindings, export macros |
-| memory-palace | `.cursor/mcp/memory-palace.md` | Semantic memory: structured entries for ADRs, architecture, components, patterns; recall before mandatory file reads for orientation; memory-writer mirrors all markdown memory writes | Orientation recall at session start; linking related concepts; cross-session context recall |
+| Serena | `.cursor/mcp/serena.md` | Structural code analysis: symbol discovery, reference search, pattern search | Searching for symbols, call sites, references |
+
+> [WARNING] memory-palace is NOT connected in this project. Agents use the markdown
+> memory files under `.cursor/memory/**` directly. To enable semantic memory later,
+> install memory-palace, restore its entry in `.mcp.json`, and re-add a row here.
 
 ---
 

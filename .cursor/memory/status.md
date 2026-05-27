@@ -1,7 +1,7 @@
 # Memory Status
 # File: .cursor/memory/status.md
 # Maintained by: Memory writer
-# Last updated: (not yet populated)
+# Last updated: 2026-05-27 (initial project setup)
 
 > Authoritative list of all memory files and their current state.
 > Agents read this before accessing any memory file to know what exists.
@@ -15,9 +15,9 @@
 
 | File | Status | Last updated | Notes |
 |---|---|---|---|
-| `.cursor/memory/project/brief.md` | not yet created | — | Fill during project setup |
-| `.cursor/memory/project/domain.md` | not yet created | — | Fill during project setup |
-| `.cursor/memory/project/build.md` | not yet created | — | Fill during first Environment run |
+| `.cursor/memory/project/brief.md` | created | 2026-05-27 | Populated during project setup |
+| `.cursor/memory/project/domain.md` | created | 2026-05-27 | Populated during project setup |
+| `.cursor/memory/project/build.md` | created | 2026-05-27 | Populated during project setup (uv, pure Python) |
 
 ## Architecture memory
 

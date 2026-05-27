@@ -97,6 +97,11 @@ dist/
 build/
 pip-wheel-metadata/
 
+# Tooling caches (uv.lock is tracked on purpose for reproducibility)
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
 # PyCharm
 .idea/
 
