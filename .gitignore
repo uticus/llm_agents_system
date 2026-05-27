@@ -1,0 +1,157 @@
+
+
+############################################################
+# AI Agent
+############################################################
+# .cursorrules
+# .cursor/
+.serena/
+.claude/
+# docs/ai/
+.mcp.json
+
+# session memory
+.cursor/tasks/active/*.md
+.cursor/tasks/archive/*.md
+.cursor/tasks/archive/request*/
+.cursor/tasks/decisions/*.md
+.cursor/tasks/inbox/*.md
+.cursor/tasks/sessions/*.md
+
+
+############################################################
+# Build & binaries (your chosen layout)
+############################################################
+
+/build/
+/bin/
+/cmake-build-*
+
+############################################################
+# CMake
+############################################################
+
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+install_manifest.txt
+compile_commands.json
+
+# CMake presets local overrides
+CMakeUserPresets.json
+
+############################################################
+# Visual Studio
+############################################################
+
+.vs/
+*.VC.db
+*.VC.VC.opendb
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+.vscode/
+
+# MSBuild intermediates
+x64/
+Win32/
+Debug/
+Release/
+RelWithDebInfo/
+MinSizeRel/
+
+# Object / pdb / dll / lib (only if outside bin/)
+*.obj
+*.pdb
+*.ilk
+*.exp
+*.iobj
+*.ipdb
+
+############################################################
+# Rider / JetBrains
+############################################################
+
+.idea/
+*.sln.iml
+
+############################################################
+# Python / PyBind / PyCharm
+############################################################
+
+# Bytecode
+__pycache__/
+*.pyc
+*.pyo
+
+# Virtual envs
+.venv/
+venv/
+env/
+
+# Build artifacts
+*.egg-info/
+dist/
+build/
+pip-wheel-metadata/
+
+# PyCharm
+.idea/
+
+# PyBind binaries (only if not under /bin)
+*.pyd
+*.so
+*.dll
+
+############################################################
+# GoogleTest / FetchContent
+############################################################
+
+_testing/
+googletest-build/
+_gtest/
+CTestTestfile.cmake
+Testing/
+
+############################################################
+# Logs & temp
+############################################################
+
+*.log
+*.tmp
+*.bak
+*.swp
+
+############################################################
+# OS junk
+############################################################
+
+.DS_Store
+Thumbs.db
+
+############################################################
+# Research prototypes � build artifacts excluded, source tracked
+############################################################
+
+research/prototypes/*/build/
+research/prototypes/*/out/
+research/prototypes/*/Debug/
+research/prototypes/*/Release/
+research/prototypes/*/*.exe
+
+############################################################
+# Test run output � group directories ignored, .gitkeep tracked
+############################################################
+
+research/testruns/*/
+
+############################################################
+# Do NOT ignore game data
+############################################################
+# Explicitly keep configs
+!/data/
+!/data/config/
+!/data/config/v0/
+!/data/config/v0/*.json
