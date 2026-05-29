@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "trace_id": "test-trace-err-001",
+  "spans": [
+    {
+      "trace_id": "test-trace-err-001",
+      "span_id": "span-e01",
+      "parent_id": null,
+      "name": "routing",
+      "kind": "agent",
+      "start_time": 0.0,
+      "start_wall": "2026-01-01T00:00:00+00:00",
+      "end_time": 0.6,
+      "duration_s": 0.6,
+      "status": "error",
+      "attributes": {
+        "error": "All providers failed"
+      }
+    },
+    {
+      "trace_id": "test-trace-err-001",
+      "span_id": "span-e02",
+      "parent_id": "span-e01",
+      "name": "llm_call",
+      "kind": "llm",
+      "start_time": 0.05,
+      "start_wall": "2026-01-01T00:00:00.050000+00:00",
+      "end_time": 0.55,
+      "duration_s": 0.5,
+      "status": "error",
+      "attributes": {
+        "error": "Rate limit exceeded",
+        "prompt_tokens": 80,
+        "completion_tokens": 0,
+        "cost_usd": 0.0,
+        "latency_s": 0.5
+      }
+    }
+  ]
+}

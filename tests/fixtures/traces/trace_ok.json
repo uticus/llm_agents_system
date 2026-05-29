@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "trace_id": "test-trace-ok-001",
+  "spans": [
+    {
+      "trace_id": "test-trace-ok-001",
+      "span_id": "span-001",
+      "parent_id": null,
+      "name": "routing",
+      "kind": "agent",
+      "start_time": 0.0,
+      "start_wall": "2026-01-01T00:00:00+00:00",
+      "end_time": 0.5,
+      "duration_s": 0.5,
+      "status": "ok",
+      "attributes": {}
+    },
+    {
+      "trace_id": "test-trace-ok-001",
+      "span_id": "span-002",
+      "parent_id": "span-001",
+      "name": "llm_call",
+      "kind": "llm",
+      "start_time": 0.1,
+      "start_wall": "2026-01-01T00:00:00.100000+00:00",
+      "end_time": 0.4,
+      "duration_s": 0.3,
+      "status": "ok",
+      "attributes": {
+        "prompt_tokens": 100,
+        "completion_tokens": 50,
+        "cost_usd": 0.001,
+        "latency_s": 0.3
+      }
+    },
+    {
+      "trace_id": "test-trace-ok-001",
+      "span_id": "span-003",
+      "parent_id": "span-001",
+      "name": "tool:add",
+      "kind": "tool",
+      "start_time": 0.41,
+      "start_wall": "2026-01-01T00:00:00.410000+00:00",
+      "end_time": 0.45,
+      "duration_s": 0.04,
+      "status": "ok",
+      "attributes": {
+        "tool_name": "add"
+      }
+    }
+  ]
+}
