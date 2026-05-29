@@ -558,9 +558,6 @@ HotpotQA multi-hop; cost — mean USD per completed task; cache hit — fraction
 | Cache hit rate | >= 0.40 | 0.55 [OK] | 0.42 [OK] | 0.38 [WARNING] |
 
 
-
-
-
 ```bash
 uv run python -m llm_agents.evaluation.benchmarking --suite <name>
 ```
@@ -576,7 +573,8 @@ uv run python -m llm_agents.evaluation.benchmarking --suite <name>
 - PEFT / QLoRA fine-tuning implementation behind the `training` extra (current FineTuner
   accepts any `trainer_factory`; a default PEFT factory is not yet shipped).
 - MLflow model registry and DVC / Delta Lake data versioning integration.
-- Real benchmark task suites with published numbers; per-tenant budget enforcement.
+- Implement concrete benchmark task suites (`evaluation/benchmarking/` harness is ready; suites are not yet defined); replace the current projected illustrative values with actually measured results.
+- Per-tenant budget enforcement.
 - `async` inference client for concurrent step execution in `hierarchical_agents`.
 - Durable deduplication store for `IngestionPipeline` and `Indexer` (currently in-process
   `set[str]` — lost on restart).
