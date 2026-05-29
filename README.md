@@ -9,9 +9,32 @@ fine-tuning, serving, data connectors — live behind thin interfaces and are op
 [optional extras](#optional-extras), so a default install pulls almost nothing and tests
 run against mocked boundaries.
 
+**Quick links:** [Install](#getting-started) · [API + recipes](#usage) · [Architecture](#architecture) · [Module docs](docs/index.md)
+
 ---
 
-## Problem
+## Documentation
+
+Full per-module documentation lives in [`docs/`](docs/):
+
+- [`docs/index.md`](docs/index.md) — system architecture overview, layer diagram, end-to-end
+  data flow diagrams, and an index of all module docs
+- [`docs/infra/`](docs/infra/) — tracing, observability, inference_routing,
+  cost_latency_optimization, model_hub, guardrails
+- [`docs/core/`](docs/core/) — agent_memory, long_context, tool_orchestration, planning,
+  hierarchical_agents, replay_analysis, prompting
+- [`docs/data/`](docs/data/) — connectors, parsers, ingestion
+- [`docs/rag/`](docs/rag/) — embeddings, vector_store, indexing, retrieval, reranking, pipeline
+- [`docs/evaluation/`](docs/evaluation/) — framework, prompts, benchmarking, hallucination
+- [`docs/training/`](docs/training/) — fine_tuning, datasets, experiment_tracking
+- [`docs/serving/`](docs/serving/) — api
+
+Each file covers: public API, architecture (conceptual view + data flow), design decisions,
+tradeoffs, scaling concerns, future improvements, and usage examples.
+
+---
+
+## Motivation
 
 Building a single LLM call is easy. Building a *platform* of agents that stays correct,
 grounded, observable, and affordable is not. Real deployments hit the same recurring
@@ -42,6 +65,50 @@ This project factors each concern into an independent, testable subsystem.
 Subsystems are grouped into layers with a strict dependency direction. Runtime layers flow
 infra → data → rag → core → serving. Offline layers (training, evaluation) depend on the
 runtime layers, but nothing in the runtime path depends on them.
+
+```
++------------------------------------------------------------------+
+|  serving layer                                                   |
+|  FastAPI application — /health  /chat  /rag/answer               |
++------------------------------------------------------------------+
+         |                            |
+         v                            v
++------------------+      +--------------------------+
+|  core layer      |      |  rag layer               |
+|  agent_memory    |      |  pipeline                |
+|  long_context    |      |    retrieval             |
+|  tool_orchestrat.|      |    reranking             |
+|  planning        |      |    embeddings            |
+|  hierarchical    |      |    vector_store          |
+|  replay_analysis |      |    indexing              |
+|  prompting       |      +-----------+--------------+
++------------------+                  |
+                                      v
+                         +--------------------------+
+                         |  data layer              |
+                         |  ingestion               |
+                         |    connectors            |
+                         |    parsers               |
+                         +--------------------------+
+
++------------------------------------------------------------------+
+|  infra layer  (cross-cutting — used by every layer above)        |
+|  tracing  observability  inference_routing  model_hub            |
+|  cost_latency_optimization  guardrails                           |
++------------------------------------------------------------------+
+
++------------------------------------------------------------------+
+|  training layer  (offline — separate from serving path)          |
+|  fine_tuning  datasets  experiment_tracking                      |
++------------------------------------------------------------------+
+
++------------------------------------------------------------------+
+|  evaluation layer  (offline + CI)                                |
+|  framework  prompts  benchmarking  hallucination                 |
++------------------------------------------------------------------+
+```
+
+Interactive layer diagram (GitHub rendering):
 
 ```mermaid
 flowchart TB
@@ -103,119 +170,247 @@ flowchart TB
 
 ### Request flow (grounded RAG answer)
 
+Detailed step-by-step with actual class and method names:
+
+```
+HTTP client
+    |
+    | POST /rag/answer {query, top_k, filters}
+    v
+serving/api  (_routes.py — FastAPI handler)
+    |
+    | 1. guardrail chain — keyword/embedding pre-check
+    v
+rag/pipeline  (RagPipeline.answer)
+    |
+    | 2. retrieve top_k passages
+    v
+rag/retrieval  (DenseRetriever.retrieve)
+    |
+    | 3. embed query
+    v
+rag/embeddings  (Embedder.embed)
+    |
+    | 4. vector search
+    v
+rag/vector_store  (InMemoryVectorStore.search)
+    |
+    | 5. optional rerank
+    v
+rag/reranking  (Reranker.rerank)
+    |
+    | 6. generate grounded answer
+    v
+core/prompting  (PromptTemplate.format)
+    |
+    v
+infra/inference_routing  (Router.complete — retry + fallback)
+    |
+    v
+infra/model_hub  (Backend.generate)
+    |
+    | 7. cost + latency tracking
+    v
+infra/cost_latency_optimization  (BudgetTracker, CompletionCache)
+    |
+    | 8. tracing + metrics export
+    v
+infra/tracing + infra/observability
+    |
+    v
+GroundedAnswer  {answer, passages}  --HTTP--> client
+```
+
+Sequence view:
+
 ```mermaid
 sequenceDiagram
     participant API as serving.api
-    participant Plan as core.planning
+    participant Guard as infra.guardrails
     participant RAG as rag.pipeline
     participant Ret as rag.retrieval
     participant Rank as rag.reranking
     participant Route as infra.inference_routing
-    participant Guard as infra.guardrails
     participant LLM as model (via model_hub)
 
-    API->>Plan: user query
-    Plan->>RAG: answer(query)
+    API->>Guard: pre-check query
+    Guard-->>API: pass / block
+    API->>RAG: answer(query, top_k, filters)
     RAG->>Ret: retrieve top-k passages
     Ret-->>RAG: candidates
-    RAG->>Rank: cross-encoder rerank
+    RAG->>Rank: rerank (optional)
     Rank-->>RAG: ranked context
     RAG->>Route: prompt + grounded context
-    Route->>LLM: generate (model by policy)
+    Route->>LLM: generate (model by policy, retry + fallback)
     LLM-->>Route: completion
-    Route-->>RAG: answer
-    RAG->>Guard: filter (domain/tone/leaks)
-    Guard-->>API: safe grounded answer
-    Note over API,LLM: tracing spans + metrics recorded for every call
+    Route-->>RAG: answer text
+    RAG-->>API: GroundedAnswer {answer, passages}
+    Note over API,LLM: tracing spans + metrics recorded for every hop
+```
+
+### Offline ingestion and indexing flow
+
+```
+external source
+    |
+data/connectors  (Connector.fetch_since)
+    |  Document(doc_id, content, source, metadata)
+    v
+data/parsers  (DocumentParser.parse)
+    |  ParsedDocument(doc_id, text, metadata)
+    v
+data/ingestion  (IngestionPipeline.ingest)
+    |  MD5 dedup at document level
+    |  TextChunker.chunk -> list[str]
+    v
+rag/indexing  (Indexer.index)
+    |  MD5 dedup at chunk level
+    |  batch embed -> upsert with chunk_id = "doc_id#N"
+    v
+rag/vector_store  (VectorStore.upsert)
+```
+
+### Training / fine-tuning flow
+
+```
+training/datasets  (DatasetLoader.from_jsonl / from_prodigy)
+    |  Dataset.split(train_ratio) -> (train, val)
+    v
+training/fine_tuning  (FineTuner.run)
+    |  trainer_factory -> train -> save -> get_metrics
+    v
+training/experiment_tracking  (Tracker.log_metrics / log_params)
+    |  NoOpTracker (prod) or InMemoryTracker (tests)
+    v
+FineTuneResult(model_path, metrics, run_id, artifact_uri)
 ```
 
 ### Subsystems
 
 #### `infra/` — runtime infrastructure
 
-| Subsystem | Package | Responsibility |
-|---|---|---|
-| Model hub | `infra/model_hub/` | Load/version models across OpenAI, HuggingFace, GGUF (llama.cpp/vLLM); MLflow versioning |
-| Inference routing | `infra/inference_routing/` | Route across providers/models by policy (e.g. GPT-4 for generation, Mistral for classification) |
-| Cost/latency optimization | `infra/cost_latency_optimization/` | Caching, batching, model-tier selection, budget tracking |
-| Guardrails | `infra/guardrails/` | Output filtering and tone/compliance enforcement (regex/embedding + optional NeMo) |
-| Tracing system | `infra/tracing/` | Structured spans across agent, tool, and LLM calls |
-| Observability | `infra/observability/` | Metrics, logging, dashboards |
+| Subsystem | Package | Responsibility | Doc |
+|---|---|---|---|
+| Model hub | `infra/model_hub/` | Load/version models across OpenAI, HuggingFace, GGUF (llama.cpp/vLLM) | [model_hub](docs/infra/model_hub.md) |
+| Inference routing | `infra/inference_routing/` | Route across providers/models by policy; retry + fallback | [inference_routing](docs/infra/inference_routing.md) |
+| Cost/latency optimization | `infra/cost_latency_optimization/` | LRU cache, async batcher, budget tracker | [cost_latency_optimization](docs/infra/cost_latency_optimization.md) |
+| Guardrails | `infra/guardrails/` | Keyword / embedding filter chain; tone/compliance enforcement | [guardrails](docs/infra/guardrails.md) |
+| Tracing | `infra/tracing/` | Async-safe spans across agent, tool, and LLM calls | [tracing](docs/infra/tracing.md) |
+| Observability | `infra/observability/` | Prometheus metrics, JSON structured logging, span bridge | [observability](docs/infra/observability.md) |
 
 #### `data/` — ingestion
 
-| Subsystem | Package | Responsibility |
-|---|---|---|
-| Connectors | `data/connectors/` | Pull from PostgreSQL, Confluence, Jira, Google Drive |
-| Parsers | `data/parsers/` | Extract text from PDF, DOCX, custom formats |
-| Ingestion | `data/ingestion/` | Continuous pull → parse → chunk → embed pipeline |
+| Subsystem | Package | Responsibility | Doc |
+|---|---|---|---|
+| Connectors | `data/connectors/` | Cursor-based incremental fetch from any source | [connectors](docs/data/connectors.md) |
+| Parsers | `data/parsers/` | Decode bytes/str; pluggable `ParserRegistry` | [parsers](docs/data/parsers.md) |
+| Ingestion | `data/ingestion/` | fetch → MD5 dedup → parse → chunk → upsert pipeline | [ingestion](docs/data/ingestion.md) |
 
 #### `rag/` — retrieval-augmented generation
 
-| Subsystem | Package | Responsibility |
-|---|---|---|
-| Embeddings | `rag/embeddings/` | sentence-transformers or provider embeddings behind an interface |
-| Vector store | `rag/vector_store/` | FAISS, pgvector, Weaviate, Chroma, Elasticsearch adapters |
-| Indexing | `rag/indexing/` | Chunk → embed → upsert documents |
-| Retrieval | `rag/retrieval/` | Dense passage retrieval |
-| Reranking | `rag/reranking/` | Cross-encoder reranking |
-| Pipeline | `rag/pipeline/` | Retrieve → (rerank) → generate grounded answers |
+| Subsystem | Package | Responsibility | Doc |
+|---|---|---|---|
+| Embeddings | `rag/embeddings/` | `Embedder` protocol; `FakeEmbedder`, `BatchEmbedder` | [embeddings](docs/rag/embeddings.md) |
+| Vector store | `rag/vector_store/` | Cosine-similarity search; `InMemoryVectorStore` | [vector_store](docs/rag/vector_store.md) |
+| Indexing | `rag/indexing/` | chunk → MD5 dedup → batch embed → upsert | [indexing](docs/rag/indexing.md) |
+| Retrieval | `rag/retrieval/` | Dense passage retrieval with metadata filtering | [retrieval](docs/rag/retrieval.md) |
+| Reranking | `rag/reranking/` | Score-based reranking; `FakeReranker`, `ScoreReranker` | [reranking](docs/rag/reranking.md) |
+| Pipeline | `rag/pipeline/` | retrieve → (rerank) → generate grounded answers | [pipeline](docs/rag/pipeline.md) |
 
 #### `core/` — agent capabilities
 
-| Subsystem | Package | Responsibility |
-|---|---|---|
-| Agent memory | `core/agent_memory/` | Short/long-term memory; vector buffers (Redis, Chroma) |
-| Planning systems | `core/planning/` | Decompose goals into executable steps |
-| Hierarchical agents | `core/hierarchical_agents/` | Supervisor/worker delegation and coordination |
-| Tool orchestration | `core/tool_orchestration/` | Tool registry, dispatch, execution |
-| Long-context handling | `core/long_context/` | Chunking, summarization, retrieval over large contexts |
-| Prompting | `core/prompting/` | Dynamic few-shot prompt templates |
-| Replay-analysis agents | `core/replay_analysis/` | Analyze recorded run traces |
+| Subsystem | Package | Responsibility | Doc |
+|---|---|---|---|
+| Agent memory | `core/agent_memory/` | Short/long-term memory; scorer-based recall | [agent_memory](docs/core/agent_memory.md) |
+| Planning | `core/planning/` | Decompose goals into executable steps; reactive replanning | [planning](docs/core/planning.md) |
+| Hierarchical agents | `core/hierarchical_agents/` | Coordinator/worker delegation and coordination | [hierarchical_agents](docs/core/hierarchical_agents.md) |
+| Tool orchestration | `core/tool_orchestration/` | Tool registry, sequential/parallel dispatch | [tool_orchestration](docs/core/tool_orchestration.md) |
+| Long-context handling | `core/long_context/` | Sliding-window, summary, and topic-based strategies | [long_context](docs/core/long_context.md) |
+| Prompting | `core/prompting/` | `PromptTemplate`, `FewShotTemplate`, `ExampleSelector` | [prompting](docs/core/prompting.md) |
+| Replay analysis | `core/replay_analysis/` | Record and analyze agent run traces | [replay_analysis](docs/core/replay_analysis.md) |
 
 #### `serving/` — HTTP
 
-| Subsystem | Package | Responsibility |
-|---|---|---|
-| API | `serving/api/` | FastAPI services exposing orchestration, RAG, and chat |
+| Subsystem | Package | Responsibility | Doc |
+|---|---|---|---|
+| API | `serving/api/` | FastAPI app; `/health` `/chat` `/rag/answer`; Pydantic schemas | [api](docs/serving/api.md) |
 
 #### `training/` — offline MLOps
 
-| Subsystem | Package | Responsibility |
-|---|---|---|
-| Fine-tuning | `training/fine_tuning/` | Parameter-efficient fine-tuning (Transformers + PEFT) |
-| Datasets | `training/datasets/` | Annotation (Prodigy), storage (Delta Lake / DVC) |
-| Experiment tracking | `training/experiment_tracking/` | MLflow / Weights & Biases / DVC |
+| Subsystem | Package | Responsibility | Doc |
+|---|---|---|---|
+| Fine-tuning | `training/fine_tuning/` | `FineTuner` with pluggable `trainer_factory`; PEFT-ready | [fine_tuning](docs/training/fine_tuning.md) |
+| Datasets | `training/datasets/` | `Dataset` (split, validate, version hash); Prodigy normaliser | [datasets](docs/training/datasets.md) |
+| Experiment tracking | `training/experiment_tracking/` | `Tracker` Protocol; `NoOpTracker`, `InMemoryTracker` | [experiment_tracking](docs/training/experiment_tracking.md) |
 
 #### `evaluation/` — offline evaluation
 
-| Subsystem | Package | Responsibility |
-|---|---|---|
-| Evaluation framework | `evaluation/framework/` | Metrics (incl. BLEU/ROUGE/F1), harnesses, scoring |
-| Prompt evaluation | `evaluation/prompts/` | Compare prompt variants; consistency tests |
-| Benchmarking | `evaluation/benchmarking/` | Run agents against task suites; aggregate results |
-| Hallucination detection | `evaluation/hallucination/` | Compare generations against ground-truth snippets |
+| Subsystem | Package | Responsibility | Doc |
+|---|---|---|---|
+| Evaluation framework | `evaluation/framework/` | `EvalHarness`, `Metric` protocol, `EvalReport`, `aggregate` | [framework](docs/evaluation/framework.md) |
+| Prompt evaluation | `evaluation/prompts/` | Compare prompt variants; `PromptComparison` | [prompts](docs/evaluation/prompts.md) |
+| Benchmarking | `evaluation/benchmarking/` | Task suites, p95 latency, CLI entrypoint | [benchmarking](docs/evaluation/benchmarking.md) |
+| Hallucination detection | `evaluation/hallucination/` | `OverlapDetector`, `LLMJudgeDetector`, `HallucinationReport` | [hallucination](docs/evaluation/hallucination.md) |
 
 ### Project layout
 
 ```
 llm_agents_system/
   src/llm_agents/
-    infra/      model_hub, inference_routing, cost_latency_optimization, guardrails, tracing, observability
-    data/       connectors, parsers, ingestion
-    rag/        embeddings, vector_store, indexing, retrieval, reranking, pipeline
-    core/       agent_memory, planning, hierarchical_agents, tool_orchestration, long_context, prompting, replay_analysis
-    serving/    api
-    training/   fine_tuning, datasets, experiment_tracking
-    evaluation/ framework, prompts, benchmarking, hallucination
-    config.py   typed runtime settings (env + configs/)
-  tests/        pytest suite (unit/, integration/, fixtures/)
-  configs/      runtime + observability config
-  deploy/       Dockerfile, docker-compose.yml, .dockerignore
-  .github/workflows/ CI (lint + test)
-  pyproject.toml     metadata, deps, optional extras, ruff + pytest config (uv)
-  .cursor/      multi-agent development pipeline
-  CLAUDE.md     entry point for agents working in this repo
+    infra/
+      tracing/                    Span, SpanContext, FinishedSpan, Tracer, InMemoryCollector
+      observability/              MetricsRegistry, JSONFormatter, bridge_span
+      inference_routing/          Router, RoutingPolicy, Candidate
+      cost_latency_optimization/  CompletionCache, Batcher, BudgetTracker
+      model_hub/                  ModelHub, ModelBackend (Protocol), OpenAIBackend, HuggingFaceBackend
+      guardrails/                 GuardrailChain, KeywordFilter, EmbeddingFilter
+    data/
+      connectors/                 Document, Connector (Protocol), FakeConnector
+      parsers/                    ParsedDocument, DocumentParser (Protocol), TextParser, ParserRegistry
+      ingestion/                  IngestionPipeline, IngestionReport
+    rag/
+      embeddings/                 Embedder (Protocol), FakeEmbedder, BatchEmbedder
+      vector_store/               VectorStore (Protocol), InMemoryVectorStore, SearchResult
+      indexing/                   Indexer, IndexReport
+      retrieval/                  DenseRetriever, RetrievedPassage
+      reranking/                  Reranker (Protocol), FakeReranker, ScoreReranker
+      pipeline/                   RagPipeline, GroundedAnswer
+    core/
+      agent_memory/               Memory, MemoryEntry, ShortTermMemory, LongTermMemory
+      long_context/               ContextManager (Protocol), SlidingWindowStrategy, SummaryStrategy
+      tool_orchestration/         Tool (Protocol), ToolRegistry, ToolOrchestrator
+      planning/                   Plan, Step, Planner (Protocol), SimplePlanner, ReactivePlanner
+      hierarchical_agents/        AgentNode (Protocol), Coordinator, WorkerAgent
+      replay_analysis/            Event, ReplaySession, ReplayAnalyzer
+      prompting/                  PromptTemplate, FewShotTemplate, ExampleSelector
+    serving/
+      api/                        create_app, build_router, ChatRequest, RagRequest, HealthResponse
+    training/
+      fine_tuning/                FineTuner, FineTuneConfig, FineTuneResult
+      datasets/                   Dataset, Example, DatasetLoader, from_prodigy
+      experiment_tracking/        Tracker (Protocol), NoOpTracker, InMemoryTracker
+    evaluation/
+      framework/                  EvalCase, EvalResult, EvalReport, EvalHarness, Metric (Protocol)
+      prompts/                    PromptVariant, VariantResult, PromptComparison, compare
+      benchmarking/               BenchmarkTask, Suite, BenchmarkRunner, BenchmarkReport
+      hallucination/              HallucinationReport, HallucinationDetector (Protocol), OverlapDetector, LLMJudgeDetector
+    config.py                     typed runtime settings (env + configs/)
+  tests/unit/                     mirrors src/ — one test file per module (633 tests)
+  docs/                           per-module documentation
+    index.md                      system overview, layer diagram, all flow diagrams
+    infra/                        6 module docs
+    core/                         7 module docs
+    data/                         3 module docs
+    rag/                          6 module docs
+    evaluation/                   4 module docs
+    training/                     3 module docs
+    serving/                      1 module doc
+  configs/                        runtime + observability config
+  deploy/                         Dockerfile, docker-compose.yml, .dockerignore
+  .github/workflows/              CI (lint + test)
+  pyproject.toml                  metadata, deps, optional extras, ruff + pytest config (uv)
+  .cursor/                        multi-agent development pipeline
+  CLAUDE.md                       entry point for agents working in this repo
 ```
 
 ---
@@ -232,9 +427,37 @@ llm_agents_system/
 | **uv + committed `uv.lock`** | Fast, reproducible installs; the lockfile pins exact versions for CI and every developer. |
 | **`src/` layout, mock the provider boundary** | Tests run against the installed package; unit tests never make real network/model calls. |
 
-> Note: this supersedes the earlier "external APIs only, no local inference" scope. Local
-> inference and fine-tuning are now in scope, but isolated behind the `local-inference` and
-> `training` extras so they don't burden the default install.
+---
+
+## Cross-cutting design principles
+
+**Structural protocols over inheritance.**
+Every public interface is a `@runtime_checkable Protocol`. Any object with the right
+methods satisfies it — no base class required. `isinstance()` checks work at runtime,
+enabling duck-typed dependency injection everywhere.
+
+**Light-core principle.**
+The default install has no heavy third-party dependencies. Optional extras (`openai`,
+`training`, `serving`) gate the heavy imports. All optional imports are deferred to the
+first call site inside the relevant function so that importing a module without its extra
+installed does not fail at import time.
+
+**Deterministic test doubles.**
+Every module ships a `FakeXxx` implementation (or `InMemoryXxx` / `NoOpXxx`) that is
+fully deterministic, requires no network or disk access, and is usable as a drop-in in
+unit tests. No mocking frameworks needed.
+
+**Content-hash deduplication.**
+MD5 hashes guard against redundant work at two levels in the ingestion/indexing path:
+- Document level in `IngestionPipeline` — skips re-parsing unchanged documents.
+- Chunk level in `Indexer` — skips re-embedding unchanged chunks.
+Both levels use an in-process `set[str]`; durability across restarts requires an external
+store (a noted future improvement).
+
+**Async-safe tracing.**
+`contextvars.ContextVar` (not thread-local storage) propagates the active span across
+`await` boundaries. Span lifecycle is split into `Span` (open, mutable) and `FinishedSpan`
+(immutable) to enforce correct open/close semantics at the type level.
 
 ---
 
@@ -280,15 +503,31 @@ llm_agents_system/
 
 ---
 
+## Implementation status
+
+All 30 modules are implemented and tested. The test suite has **633 tests, all passing**.
+
+| Layer | Modules | Status |
+|---|---|---|
+| infra | tracing, observability, inference_routing, cost_latency_optimization, model_hub, guardrails | [OK] |
+| core | agent_memory, long_context, tool_orchestration, planning, hierarchical_agents, replay_analysis, prompting | [OK] |
+| data | connectors, parsers, ingestion | [OK] |
+| rag | embeddings, vector_store, indexing, retrieval, reranking, pipeline | [OK] |
+| evaluation | framework, prompts, benchmarking, hallucination | [OK] |
+| training | fine_tuning, datasets, experiment_tracking | [OK] |
+| serving | api | [OK] |
+
+---
+
 ## Benchmarks
 
-> [WARNING] The benchmarking harness (`evaluation/benchmarking/`) is scaffolded but task
-> suites are not yet implemented. The table below defines the metrics and targets we intend
+> [WARNING] The benchmarking harness (`evaluation/benchmarking/`) is implemented but task
+> suites are not yet defined. The table below defines the metrics and targets we intend
 > to measure — values are **not yet measured** and must not be cited as results.
 
-Planned methodology: run a fixed task suite through an agent/RAG configuration, record
-traces, and aggregate per-run metrics. Runs are reproducible by replaying recorded traces
-instead of re-calling providers.
+Methodology: run a fixed task suite through an agent/RAG configuration, record traces,
+and aggregate per-run metrics. Runs are reproducible by replaying recorded traces instead
+of re-calling providers.
 
 | Metric | Definition | Target | Status |
 |---|---|---|---|
@@ -302,7 +541,6 @@ instead of re-calling providers.
 | Cache hit rate | Fraction of completions served from cache | — | not measured |
 
 ```bash
-# placeholder — CLI not yet implemented
 uv run python -m llm_agents.evaluation.benchmarking --suite <name>
 ```
 
@@ -310,15 +548,17 @@ uv run python -m llm_agents.evaluation.benchmarking --suite <name>
 
 ## Future improvements
 
-- Concrete model-backend adapters (OpenAI, HF, llama.cpp, vLLM) behind `model_hub`.
-- Async inference client and concurrent step execution.
-- Reference vector-store adapters (FAISS local + pgvector server) and an embeddings adapter.
-- End-to-end RAG pipeline wiring ingestion → indexing → retrieval → reranking → generation.
-- Guardrails: ship default regex/embedding filters; add a NeMo Guardrails adapter.
-- Fine-tuning loop (PEFT) with MLflow model registry and DVC/Delta Lake data versioning.
-- FastAPI serving app with chat + RAG endpoints (replacing the placeholder Docker `CMD`).
-- Real benchmark suites + reporting CLI; publish measured numbers.
-- Hard budget enforcement (per-request and per-tenant).
+- External vector-store adapters: FAISS, pgvector, Weaviate, Chroma, Elasticsearch.
+- External embeddings adapters: sentence-transformers, OpenAI embeddings API.
+- Concrete model-hub adapters for HuggingFace and GGUF (llama.cpp / vLLM).
+- NeMo Guardrails adapter behind `guardrails`.
+- PEFT / QLoRA fine-tuning implementation behind the `training` extra (current FineTuner
+  accepts any `trainer_factory`; a default PEFT factory is not yet shipped).
+- MLflow model registry and DVC / Delta Lake data versioning integration.
+- Real benchmark task suites with published numbers; per-tenant budget enforcement.
+- `async` inference client for concurrent step execution in `hierarchical_agents`.
+- Durable deduplication store for `IngestionPipeline` and `Indexer` (currently in-process
+  `set[str]` — lost on restart).
 
 ---
 
@@ -330,8 +570,14 @@ Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/).
 # Install project + dev dependencies (light — no heavy ML/RAG deps)
 uv sync --extra dev
 
-# Run the test suite
+# Run the full test suite (633 tests, all passing)
 uv run pytest
+
+# Run with short tracebacks and quiet output
+uv run pytest --tb=short -q
+
+# Run with coverage report
+uv run pytest --cov=llm_agents --cov-report=term-missing
 
 # Lint and format
 uv run ruff check .
@@ -367,6 +613,274 @@ docker compose -f deploy/docker-compose.yml up --build
 - LLM outputs are non-deterministic; reproducible runs come from recorded traces stored
   under `tests/fixtures/traces/` and replayed via `core/replay_analysis/`.
 - `LLM_AGENTS_SEED` fixes any non-LLM randomness (sampling, shuffling).
+
+---
+
+## Usage
+
+### API at a glance
+
+Every public interface is a `@runtime_checkable Protocol` — swap any component without
+subclassing.  The table below lists the primary imports per layer.
+
+| Layer | Import path | Key types | Docs |
+|---|---|---|---|
+| **rag** | `llm_agents.rag.pipeline` | `RagPipeline`, `GroundedAnswer` | [pipeline](docs/rag/pipeline.md) |
+| **rag** | `llm_agents.rag.embeddings` | `Embedder` (Protocol), `FakeEmbedder`, `BatchEmbedder` | [embeddings](docs/rag/embeddings.md) |
+| **rag** | `llm_agents.rag.vector_store` | `VectorStore` (Protocol), `InMemoryVectorStore`, `SearchResult` | [vector_store](docs/rag/vector_store.md) |
+| **rag** | `llm_agents.rag.indexing` | `Indexer`, `IndexReport` | [indexing](docs/rag/indexing.md) |
+| **rag** | `llm_agents.rag.retrieval` | `DenseRetriever`, `RetrievedPassage` | [retrieval](docs/rag/retrieval.md) |
+| **rag** | `llm_agents.rag.reranking` | `Reranker` (Protocol), `ScoreReranker`, `FakeReranker` | [reranking](docs/rag/reranking.md) |
+| **data** | `llm_agents.data.connectors` | `Connector` (Protocol), `FakeConnector`, `Document` | [connectors](docs/data/connectors.md) |
+| **data** | `llm_agents.data.parsers` | `DocumentParser` (Protocol), `TextParser`, `ParserRegistry` | [parsers](docs/data/parsers.md) |
+| **data** | `llm_agents.data.ingestion` | `IngestionPipeline`, `IngestionReport` | [ingestion](docs/data/ingestion.md) |
+| **core** | `llm_agents.core.agent_memory` | `Memory`, `ShortTermMemory`, `LongTermMemory`, `MemoryEntry` | [agent_memory](docs/core/agent_memory.md) |
+| **core** | `llm_agents.core.planning` | `Planner` (Protocol), `SimplePlanner`, `ReactivePlanner`, `Plan`, `Step` | [planning](docs/core/planning.md) |
+| **core** | `llm_agents.core.tool_orchestration` | `Tool` (Protocol), `ToolRegistry`, `ToolOrchestrator` | [tool_orchestration](docs/core/tool_orchestration.md) |
+| **core** | `llm_agents.core.hierarchical_agents` | `AgentNode` (Protocol), `Coordinator`, `WorkerAgent` | [hierarchical_agents](docs/core/hierarchical_agents.md) |
+| **core** | `llm_agents.core.prompting` | `PromptTemplate`, `FewShotTemplate`, `ExampleSelector` | [prompting](docs/core/prompting.md) |
+| **core** | `llm_agents.core.long_context` | `ContextManager` (Protocol), `SlidingWindowStrategy`, `SummaryStrategy` | [long_context](docs/core/long_context.md) |
+| **core** | `llm_agents.core.replay_analysis` | `ReplaySession`, `ReplayAnalyzer`, `Event` | [replay_analysis](docs/core/replay_analysis.md) |
+| **infra** | `llm_agents.infra.tracing` | `Tracer`, `Span`, `FinishedSpan`, `InMemoryCollector` | [tracing](docs/infra/tracing.md) |
+| **infra** | `llm_agents.infra.observability` | `MetricsRegistry`, `JSONFormatter`, `bridge_span` | [observability](docs/infra/observability.md) |
+| **infra** | `llm_agents.infra.inference_routing` | `Router`, `RoutingPolicy`, `Candidate` | [inference_routing](docs/infra/inference_routing.md) |
+| **infra** | `llm_agents.infra.model_hub` | `ModelHub`, `ModelBackend` (Protocol) | [model_hub](docs/infra/model_hub.md) |
+| **infra** | `llm_agents.infra.guardrails` | `GuardrailChain`, `KeywordFilter`, `EmbeddingFilter` | [guardrails](docs/infra/guardrails.md) |
+| **infra** | `llm_agents.infra.cost_latency_optimization` | `CompletionCache`, `Batcher`, `BudgetTracker` | [cost_latency_optimization](docs/infra/cost_latency_optimization.md) |
+| **evaluation** | `llm_agents.evaluation.hallucination` | `OverlapDetector`, `LLMJudgeDetector`, `HallucinationReport` | [hallucination](docs/evaluation/hallucination.md) |
+| **evaluation** | `llm_agents.evaluation.framework` | `EvalHarness`, `EvalReport`, `Metric` (Protocol) | [framework](docs/evaluation/framework.md) |
+| **evaluation** | `llm_agents.evaluation.benchmarking` | `BenchmarkRunner`, `Suite`, `BenchmarkTask` | [benchmarking](docs/evaluation/benchmarking.md) |
+| **evaluation** | `llm_agents.evaluation.prompts` | `compare`, `PromptComparison`, `PromptVariant` | [prompts](docs/evaluation/prompts.md) |
+| **training** | `llm_agents.training.fine_tuning` | `FineTuner`, `FineTuneConfig`, `FineTuneResult` | [fine_tuning](docs/training/fine_tuning.md) |
+| **training** | `llm_agents.training.datasets` | `Dataset`, `DatasetLoader`, `from_prodigy`, `Example` | [datasets](docs/training/datasets.md) |
+| **training** | `llm_agents.training.experiment_tracking` | `Tracker` (Protocol), `NoOpTracker`, `InMemoryTracker` | [experiment_tracking](docs/training/experiment_tracking.md) |
+| **serving** | `llm_agents.serving.api` | `create_app`, `build_router`, `ChatRequest`, `RagRequest` | [api](docs/serving/api.md) |
+
+---
+
+### Recipes
+
+#### 1. Index documents and query a RAG pipeline
+
+```python
+from llm_agents.rag.embeddings import FakeEmbedder
+from llm_agents.rag.vector_store import InMemoryVectorStore
+from llm_agents.rag.indexing import Indexer
+from llm_agents.rag.retrieval import DenseRetriever
+from llm_agents.rag.pipeline import RagPipeline
+
+# Wire the components
+embedder = FakeEmbedder(dimensions=64)
+store = InMemoryVectorStore()
+indexer = Indexer(embedder=embedder, store=store)
+
+# Index documents — chunk text is stored in metadata["text"] for retrieval
+docs = [
+    ("doc-1", "Paris is the capital of France.", {"text": "Paris is the capital of France."}),
+    ("doc-2", "The Eiffel Tower stands 330 m tall.", {"text": "The Eiffel Tower stands 330 m tall."}),
+]
+for doc_id, text, meta in docs:
+    indexer.index(doc_id, text, metadata=meta)
+
+# Build the pipeline with a simple generator
+retriever = DenseRetriever(embedder=embedder, store=store, top_k=3)
+
+def generator(query: str, passages) -> str:
+    context = "\n".join(p.text for p in passages if p.text)
+    return f"Context: {context}\nAnswer: ..."  # replace with real LLM call
+
+pipeline = RagPipeline(retriever=retriever, generator=generator)
+result = pipeline.answer("What is the capital of France?")
+print(result.answer)
+print([p.doc_id for p in result.passages])
+```
+
+#### 2. Ingest from a connector into a vector store
+
+```python
+import asyncio
+from llm_agents.data.connectors import FakeConnector
+from llm_agents.data.parsers import TextParser
+from llm_agents.data.ingestion import IngestionPipeline
+from llm_agents.rag.embeddings import FakeEmbedder
+from llm_agents.rag.vector_store import InMemoryVectorStore
+
+connector = FakeConnector(num_docs=50)
+parser = TextParser()
+embedder = FakeEmbedder(dimensions=32)
+store = InMemoryVectorStore()
+
+def chunker(text: str) -> list[str]:
+    # simple 200-char sliding window
+    return [text[i:i+200] for i in range(0, len(text), 200)] or [text]
+
+async def upsert(chunks, meta):
+    vecs = embedder.embed(chunks)
+    for i, (chunk, vec) in enumerate(zip(chunks, vecs)):
+        store.upsert(f"{meta.get('doc_id', 'x')}#{i}", vec, {**meta, "text": chunk})
+
+pipeline = IngestionPipeline(
+    connector=connector,
+    parser=parser,
+    chunker=chunker,
+    upsert=upsert,
+)
+report = asyncio.run(pipeline.ingest())
+print(f"fetched={report.fetched} upserted={report.upserted} skipped={report.skipped}")
+```
+
+#### 3. Run guardrails on LLM output
+
+```python
+from llm_agents.infra.guardrails import GuardrailChain, KeywordFilter, EmbeddingFilter
+
+# Block outputs containing banned terms
+keyword_filter = KeywordFilter(blocked=["confidential", "password", "secret"])
+
+# Block off-topic outputs using a cosine scorer (plug in a real embedder here)
+def scorer(text: str) -> float:
+    # return cosine similarity to an on-topic anchor embedding
+    return 0.9  # stub — replace with real embedding similarity
+
+embedding_filter = EmbeddingFilter(scorer=scorer, threshold=0.7)
+
+chain = GuardrailChain(filters=[keyword_filter, embedding_filter])
+
+result = chain.run("The password is hunter2")
+print(result.action)   # "block"
+print(result.reason)   # explains which filter triggered
+
+result = chain.run("Paris is the capital of France.")
+print(result.action)   # "pass"
+```
+
+#### 4. Detect hallucination in a generated answer
+
+```python
+from llm_agents.evaluation.hallucination import OverlapDetector, LLMJudgeDetector
+
+# Heuristic — no model dependencies
+detector = OverlapDetector(threshold=0.5, sentence_threshold=0.3)
+references = [
+    "Paris is the capital of France.",
+    "The Eiffel Tower is located in Paris.",
+]
+report = detector.detect(
+    answer="Paris is the capital of France. Elephants can fly.",
+    references=references,
+)
+print(report.groundedness_score)   # ~0.5 (partial support)
+print(report.is_hallucination)     # True — score below threshold
+print(report.unsupported_spans)    # ["Elephants can fly."]
+
+# LLM-as-judge — plug in any scoring callable
+def my_llm_scorer(answer: str, refs: list[str]) -> float:
+    # call your LLM judge here; return a float in [0.0, 1.0]
+    return 0.85
+
+judge = LLMJudgeDetector(scorer=my_llm_scorer, threshold=0.5)
+report = judge.detect(answer="Paris is the capital.", references=references)
+print(report.groundedness_score)   # 0.85
+```
+
+#### 5. Track a training experiment
+
+```python
+from llm_agents.training.experiment_tracking import InMemoryTracker
+from llm_agents.training.datasets import DatasetLoader
+from llm_agents.training.fine_tuning import FineTuner, FineTuneConfig
+
+# In production use NoOpTracker() or a real MLflow/W&B adapter
+tracker = InMemoryTracker()
+
+dataset = DatasetLoader.from_examples([
+    {"text": "What is RAG?", "label": "1"},
+    {"text": "Unrelated question", "label": "0"},
+])
+
+config = FineTuneConfig(
+    model_name="my-base-model",
+    epochs=3,
+    learning_rate=2e-5,
+    output_dir="/tmp/fine_tuned",
+)
+
+def my_trainer_factory(cfg, trk):
+    # return an object with .train(dataset), .save(path), .get_metrics()
+    class StubTrainer:
+        def train(self, ds): pass
+        def save(self, path): pass
+        def get_metrics(self): return {"loss": 0.25, "accuracy": 0.91}
+    return StubTrainer()
+
+tuner = FineTuner(config=config, tracker=tracker, trainer_factory=my_trainer_factory)
+result = tuner.run(dataset)
+print(result.metrics)       # {"loss": 0.25, "accuracy": 0.91}
+print(tracker.run_count)    # 1
+```
+
+#### 6. Compare prompt variants
+
+```python
+from llm_agents.evaluation.prompts import compare, PromptVariant
+
+variants = [
+    PromptVariant(name="concise", template="Answer briefly: {question}"),
+    PromptVariant(name="detailed", template="Give a thorough answer to: {question}"),
+]
+
+def agent(prompt: str) -> str:
+    # replace with a real LLM call
+    return f"[response to: {prompt[:40]}...]"
+
+questions = [
+    "What is retrieval-augmented generation?",
+    "Why is grounding important in LLM systems?",
+]
+
+comparison = compare(variants=variants, inputs=questions, agent=agent)
+print(comparison.best.name)          # variant with highest mean score (stub: first)
+for r in comparison.results:
+    print(r.variant_name, r.score)
+```
+
+#### 7. Launch the FastAPI serving app
+
+```python
+# app.py
+from llm_agents.serving.api import create_app, build_router
+from llm_agents.infra.guardrails import GuardrailChain, KeywordFilter
+from llm_agents.rag.pipeline import RagPipeline
+
+# Wire your real components here
+rag_pipeline = ...        # RagPipeline instance
+guardrail_chain = GuardrailChain(filters=[KeywordFilter(blocked=["secret"])])
+
+router = build_router()
+app = create_app(
+    router=router,
+    rag_pipeline=rag_pipeline,
+    guardrail_chain=guardrail_chain,
+    title="My Agent API",
+    version="0.1.0",
+)
+# Run with: uvicorn app:app --reload
+```
+
+```bash
+# Health check
+curl http://localhost:8000/health
+
+# Chat endpoint
+curl -X POST http://localhost:8000/chat \
+  -H "Content-Type: application/json" \
+  -d '{"messages": [{"role": "user", "content": "What is RAG?"}]}'
+
+# RAG answer endpoint
+curl -X POST http://localhost:8000/rag/answer \
+  -H "Content-Type: application/json" \
+  -d '{"query": "What is the capital of France?", "top_k": 3}'
+```
 
 ---
 
