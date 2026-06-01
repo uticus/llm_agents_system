@@ -81,7 +81,7 @@ rag/embeddings  (Embedder.embed)
     |
     | 4. vector search
     v
-rag/vector_store  (InMemoryVectorStore.search)
+rag/vector_store  (VectorStore.search — InMemoryVectorStore / FAISSVectorStore / PgVectorStore / WeaviateVectorStore)
     |
     | 5. optional rerank
     v
@@ -186,7 +186,7 @@ FineTuneResult(model_path, metrics, run_id, artifact_uri)
 | Module | Description | Doc |
 |---|---|---|
 | embeddings | `Embedder` Protocol, `FakeEmbedder`, `BatchEmbedder` | [rag/embeddings.md](rag/embeddings.md) |
-| vector_store | `VectorStore` Protocol, `InMemoryVectorStore` (cosine similarity), `SearchResult` | [rag/vector_store.md](rag/vector_store.md) |
+| vector_store | `VectorStore` Protocol, `InMemoryVectorStore` (cosine similarity), `FAISSVectorStore` (FAISS flat/cosine, `rag` extra), `PgVectorStore` (pgvector IVFFlat, `pgvector` extra), `WeaviateVectorStore` (Weaviate HNSW, `weaviate` extra), `SearchResult` | [rag/vector_store.md](rag/vector_store.md) |
 | indexing | `Indexer` (chunk → MD5 dedup → batch embed → upsert), `IndexReport` | [rag/indexing.md](rag/indexing.md) |
 | retrieval | `DenseRetriever` (embed → search → filter), `RetrievedPassage` | [rag/retrieval.md](rag/retrieval.md) |
 | reranking | `Reranker` Protocol, `FakeReranker`, `ScoreReranker` | [rag/reranking.md](rag/reranking.md) |
@@ -278,6 +278,26 @@ print(result.passages)
 ```
 
 ```python
+# Drop-in production vector-store backends (all satisfy VectorStore protocol)
+
+# FAISS flat cosine index (uv sync --extra rag)
+from llm_agents.rag.vector_store import FAISSVectorStore
+store = FAISSVectorStore()
+
+# pgvector (uv sync --extra pgvector + PostgreSQL with pgvector extension)
+import psycopg
+from llm_agents.rag.vector_store import PgVectorStore
+conn = psycopg.connect("postgresql://localhost/mydb")
+store = PgVectorStore(conn, table="rag_docs")   # table created on first upsert
+
+# Weaviate HNSW (uv sync --extra weaviate + running Weaviate instance)
+import weaviate
+from llm_agents.rag.vector_store import WeaviateVectorStore
+client = weaviate.connect_to_local()
+store = WeaviateVectorStore(client, collection_name="RagDocs")
+```
+
+```python
 # Hallucination detection
 from llm_agents.evaluation.hallucination import OverlapDetector
 
@@ -328,7 +348,8 @@ src/llm_agents/
     ingestion/           IngestionPipeline, IngestionReport
   rag/
     embeddings/          Embedder, FakeEmbedder, BatchEmbedder
-    vector_store/        VectorStore, InMemoryVectorStore, SearchResult
+    vector_store/        VectorStore, InMemoryVectorStore, FAISSVectorStore,
+                         PgVectorStore, WeaviateVectorStore, SearchResult
     indexing/            Indexer, IndexReport
     retrieval/           DenseRetriever, RetrievedPassage
     reranking/           Reranker, FakeReranker, ScoreReranker

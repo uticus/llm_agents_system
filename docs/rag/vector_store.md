@@ -15,6 +15,7 @@ The vector store module provides persistent (or in-process) storage for embeddin
 | `InMemoryVectorStore` | class | Brute-force in-memory store with cosine similarity; for tests and prototyping. |
 | `FAISSVectorStore` | class | FAISS flat inner-product index with L2-normalised cosine search; requires `rag` extra. |
 | `PgVectorStore` | class | PostgreSQL pgvector-backed store with IVFFlat approximate search; requires `pgvector` extra. |
+| `WeaviateVectorStore` | class | Weaviate HNSW-backed store with cosine similarity; requires `weaviate` extra. |
 
 ### `SearchResult`
 
@@ -105,6 +106,29 @@ class PgVectorStore:
 
 The caller provides an open `psycopg.Connection`; the store does not manage connection lifecycle. Table, extension, and index creation happen lazily on the first `upsert`. `import pgvector.psycopg` is deferred to the first `_ensure_table` call. Table identifier is validated against a safe-identifier regex to prevent SQL injection.
 
+### `WeaviateVectorStore`
+
+Requires: `pip install llm-agents-system[weaviate]` (`weaviate-client>=4.6`) and a running Weaviate instance.
+
+```python
+class WeaviateVectorStore:
+    def __init__(
+        self,
+        client: Any,               # open weaviate.WeaviateClient
+        collection_name: str = "LlmVectors",
+        dimensions: int | None = None,
+    ) -> None: ...
+    def upsert(self, doc_id: str, vector: list[float], metadata: dict[str, Any] | None = None) -> None: ...
+    def search(self, query_vector: list[float], top_k: int = 5) -> list[SearchResult]: ...
+    def delete(self, doc_id: str) -> bool: ...
+    def ensure_collection(self) -> None: ...  # explicit init for pre-existing collections
+
+    def __len__(self) -> int: ...
+    def __contains__(self, doc_id: str) -> bool: ...
+```
+
+The caller provides an open `weaviate.WeaviateClient`; the store does not manage the client lifecycle. Collection, HNSW index (cosine distance), and property schema creation happen lazily on the first `upsert` (or an explicit `ensure_collection()` call). Each document is stored as a Weaviate object with a deterministic UUID-5 derived from `doc_id` (no internal ID mapping dict needed). Metadata is stored as a JSON string in a `metadata_json` text property. `import weaviate.classes.config` and `import weaviate.classes.query` are deferred to their first call site. Collection names must start with an uppercase letter (Weaviate convention) and are validated at construction time.
+
 ---
 
 ## Architecture
@@ -119,10 +143,12 @@ The caller provides an open `psycopg.Connection`; the store does not manage conn
   +-----------------+         +-----------------------+
   | VectorStore     |  <---   | InMemoryVectorStore   |  (test / prototype)
   |  Protocol       |         +-----------------------+
-  |  upsert         |  <---   | FAISSVectorStore      |  (local, rag extra)
+  |  upsert         |  <---   | FAISSVectorStore      |  (local ANN, rag extra)
   |  search         |         +-----------------------+
-  |  delete         |  <---   | PgVectorStore         |  (persistent, pgvector extra)
+  |  delete         |  <---   | PgVectorStore         |  (persistent SQL, pgvector extra)
   +-----------------+         +-----------------------+
+                       <---   | WeaviateVectorStore   |  (managed HNSW, weaviate extra)
+                              +-----------------------+
         ^
         | search(query_vector, top_k)
         |
@@ -138,20 +164,23 @@ The vector store sits at the centre of the RAG data plane. Writes come from the 
 2. `InMemoryVectorStore` copies the vector and metadata into `_Entry` and stores it keyed by `chunk_id`.
 3. `FAISSVectorStore` stores vector and metadata in `_data` dict and marks `_dirty = True`.
 4. `PgVectorStore` issues `INSERT ... ON CONFLICT DO UPDATE` to PostgreSQL.
-5. If the key already exists, the old entry is replaced (idempotent upsert) in all implementations.
+5. `WeaviateVectorStore` calls `fetch_object_by_id` to check existence, then `data.insert` (new) or `data.replace` (update existing).
+6. If the key already exists, the old entry is replaced (idempotent upsert) in all implementations.
 
 **Read path (retrieval):**
 1. `DenseRetriever` calls `store.search(query_vector, top_k=k)`.
 2. `InMemoryVectorStore`: computes cosine similarity against every stored vector (O(n) brute force).
 3. `FAISSVectorStore`: if `_dirty`, rebuilds `IndexFlatIP` from `_data`; L2-normalises query; calls `index.search`.
 4. `PgVectorStore`: executes `SELECT doc_id, 1.0 - (embedding <=> %s::vector) AS score FROM <table> ORDER BY dist LIMIT k` via the pgvector `<=>` cosine-distance operator.
-5. Results are returned as `list[SearchResult]` sorted by descending score.
+5. `WeaviateVectorStore`: calls `collection.query.near_vector(near_vector=..., limit=k, return_metadata=MetadataQuery(distance=True))`; score = `1.0 - obj.metadata.distance`.
+6. Results are returned as `list[SearchResult]` sorted by descending score.
 
 **Delete path:**
 1. Caller calls `store.delete(doc_id)`.
 2. `InMemoryVectorStore` / `FAISSVectorStore`: removes from internal dict; FAISS marks `_dirty = True` (index rebuilt on next search).
 3. `PgVectorStore`: issues `DELETE FROM <table> WHERE doc_id = %s`; reads `rowcount` to determine whether a row existed.
-4. Returns `True` if the entry existed and was removed, `False` otherwise.
+4. `WeaviateVectorStore`: calls `fetch_object_by_id(uuid5(doc_id))`; if not None, calls `data.delete_by_id(uuid)`.
+5. Returns `True` if the entry existed and was removed, `False` otherwise.
 
 ### Key abstractions
 
@@ -164,6 +193,8 @@ The vector store sits at the centre of the RAG data plane. Writes come from the 
 **`FAISSVectorStore`** maintains a source-of-truth Python dict (`_data`) separate from the FAISS index. The FAISS flat index does not support native deletion, so deletion removes from `_data` and marks `_dirty = True`. The index is fully rebuilt from `_data` on the next `search` call. This keeps correctness trivial at the cost of O(n) rebuild time.
 
 **`PgVectorStore`** uses the injection pattern: the caller passes an open `psycopg.Connection`. This makes the store testable without a running server (mock the connection). The `_ensure_table` method is called lazily on the first `upsert`, which creates the `vector` extension, the table, and an IVFFlat index in a single transaction. Table names are validated with a strict regex to prevent SQL injection — only parameterised queries are used for data values.
+
+**`WeaviateVectorStore`** uses the same injection pattern: the caller passes an open `weaviate.WeaviateClient`. Collection creation is lazy (first `upsert` or explicit `ensure_collection()`). Document identity in Weaviate requires a UUID; a deterministic UUID-5 is derived from `doc_id` using a fixed project namespace, eliminating the need for an internal ID-mapping dict. Metadata is stored as a JSON string in a `metadata_json` text property rather than as individual Weaviate properties, keeping the schema fixed and independent of metadata shape. Upsert is a check-then-branch: `fetch_object_by_id` determines whether to call `data.insert` or `data.replace`.
 
 ---
 
@@ -205,6 +236,18 @@ The vector store sits at the centre of the RAG data plane. Writes come from the 
   **Why**: Metadata schema is not known at class-definition time (it varies by corpus). JSONB allows arbitrary key-value pairs and supports GIN indexing for metadata filtering if needed in the future.
   **Tradeoff**: Filtering on metadata requires `metadata->>'key' = 'value'` JSON path queries rather than indexed column lookups. For high-cardinality filters a separate column or GIN index on metadata is required.
 
+- **Decision**: `WeaviateVectorStore` uses a deterministic UUID-5 derived from `doc_id` rather than maintaining an internal `doc_id → uuid` dict.
+  **Why**: Weaviate objects require UUIDs. Generating a UUID-5 from a fixed namespace + `doc_id` makes the UUID predictable without any state, and the same UUID is produced on every process restart — enabling idempotent upsert and delete across restarts.
+  **Tradeoff**: UUID-5 has a theoretical collision probability (negligible in practice). The fixed namespace is baked into the code; changing it would invalidate all stored object IDs.
+
+- **Decision**: `WeaviateVectorStore` stores metadata as a JSON-serialised string in a single `metadata_json` text property rather than as individual Weaviate object properties.
+  **Why**: Weaviate's schema requires all property names and types to be declared at collection-creation time. Dynamic metadata shapes (different keys per document) cannot be accommodated in a static schema without using a blob field.
+  **Tradeoff**: Metadata fields cannot be filtered at the Weaviate layer (no `where: {path: ["metadata_json"], valueString: ...}` on arbitrary keys). If pre-search metadata filtering is required, use individual Weaviate properties or a separate filter step.
+
+- **Decision**: `WeaviateVectorStore` upsert checks existence via `fetch_object_by_id` before deciding to `insert` or `replace`.
+  **Why**: Weaviate v4 has no single atomic upsert API. The check-then-branch is explicit and testable; try/except on insert would catch legitimate errors (network failure, schema mismatch) along with duplicate-UUID errors.
+  **Tradeoff**: Two API calls per upsert instead of one. In high-throughput scenarios, a batch upsert API or a try/except approach on a narrowly typed exception may be preferred.
+
 ---
 
 ## Scaling concerns
@@ -218,6 +261,9 @@ The vector store sits at the centre of the RAG data plane. Writes come from the 
 - **PgVectorStore — IVFFlat recall**: IVFFlat uses approximate nearest-neighbour search; recall depends on `lists` and the query-time `probes` parameter. Default `lists = 100` is appropriate for corpora of ~1 million vectors; adjust to `sqrt(n)` for best recall/speed trade-off.
 - **PgVectorStore — connection management**: The store does not pool connections. For concurrent serving, use a connection pool (e.g. `psycopg_pool`) and create one `PgVectorStore` per connection, or redesign to accept a pool.
 - **PgVectorStore — metadata filtering**: Metadata is stored as JSONB. Filtering on metadata (e.g. `WHERE metadata->>'source' = 'wiki'`) is not exposed through the `VectorStore` protocol. If pre-search metadata filtering is required, execute a raw SQL query before calling `search`, or extend the protocol with a `filters` parameter.
+- **WeaviateVectorStore — upsert race condition**: The check-then-branch `fetch_object_by_id → insert/replace` is not atomic. Concurrent upserts for the same `doc_id` can cause a `replace` call for an object that doesn't yet exist, or an `insert` for one that already does. Weaviate raises an error in this case. Mitigation: use an external lock per `doc_id` for concurrent producers, or adopt a retry loop.
+- **WeaviateVectorStore — client lifecycle**: The store does not call `client.close()`. The caller must close the client after all operations. Forgetting to close leaves an open gRPC connection to the Weaviate instance.
+- **WeaviateVectorStore — metadata filtering**: Metadata is stored as a JSON string and cannot be filtered at the Weaviate query layer. Pre-search filtering requires a separate query, or redesigning the schema to use individual properties.
 - **All implementations — concurrency**: None of the implementations serialise concurrent access. Wrap in a lock or use connection pools (pgvector) for concurrent production workloads.
 
 ---
@@ -231,6 +277,9 @@ The vector store sits at the centre of the RAG data plane. Writes come from the 
 - **Weaviate / Chroma adapters**: Add adapters for managed vector database services with native metadata filtering, multi-tenancy, authentication, and horizontal scaling.
 - **Bulk upsert**: Add an `upsert_batch(entries: list[tuple[str, list[float], dict]]) -> None` method to the protocol for efficient bulk loading. PostgreSQL COPY, FAISS `index.add(matrix)`, and Weaviate batch APIs all support bulk ingestion with far lower overhead than sequential upsert.
 - **FAISSVectorStore HNSW mode**: Add a `metric` parameter to `FAISSVectorStore` (default `"cosine"`, option `"l2"`) and switch to `IndexHNSWFlat` for approximate search when exact search latency is unacceptable at scale.
+- **WeaviateVectorStore metadata schema**: Add an optional `extra_properties` parameter to `WeaviateVectorStore` that defines additional Weaviate object properties for fields that need to be filterable at query time.
+- **WeaviateVectorStore batch upsert**: Expose `upsert_batch` using `collection.data.insert_many` (Weaviate v4) for efficient bulk loading — reduces round-trips from O(n) to O(n / batch_size).
+- **WeaviateVectorStore GRPC streaming search**: Use Weaviate's gRPC streaming API (`near_vector` with `return_properties` and streaming) for large result sets to reduce memory pressure on the client side.
 
 ---
 
@@ -308,6 +357,34 @@ store.upsert("doc1", embedding_vector, {"source": "wiki", "page": 42})
 results = store.search(query_embedding, top_k=5)
 for r in results:
     print(r.doc_id, round(r.score, 3), r.metadata["source"])
+```
+
+**Weaviate adapter (requires `weaviate` extra and a running Weaviate instance):**
+
+```python
+import weaviate
+from llm_agents.rag.vector_store import WeaviateVectorStore
+
+client = weaviate.connect_to_local()  # or connect_to_weaviate_cloud(...)
+store = WeaviateVectorStore(client, collection_name="RagDocs")
+
+# first upsert creates the collection and HNSW index
+store.upsert("doc1", embedding_vector, {"source": "wiki"})
+store.upsert("doc1", new_embedding, {"source": "wiki_v2"})  # idempotent update
+
+results = store.search(query_embedding, top_k=5)
+for r in results:
+    print(r.doc_id, round(r.score, 3), r.metadata)
+
+client.close()
+```
+
+Query a pre-existing Weaviate collection (without upserting first):
+
+```python
+store = WeaviateVectorStore(client, collection_name="ExistingDocs")
+store.ensure_collection()  # connect to existing collection; no upsert needed
+results = store.search(query_embedding, top_k=10)
 ```
 
 **Swapping backends transparently (protocol-driven):**

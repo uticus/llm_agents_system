@@ -193,7 +193,7 @@ rag/embeddings  (Embedder.embed)
     |
     | 4. vector search
     v
-rag/vector_store  (InMemoryVectorStore.search)
+rag/vector_store  (VectorStore.search — InMemoryVectorStore / FAISSVectorStore / PgVectorStore / WeaviateVectorStore)
     |
     | 5. optional rerank
     v
@@ -311,7 +311,7 @@ FineTuneResult(model_path, metrics, run_id, artifact_uri)
 | Subsystem | Package | Responsibility | Doc |
 |---|---|---|---|
 | Embeddings | `rag/embeddings/` | `Embedder` protocol; `FakeEmbedder`, `BatchEmbedder` | [embeddings](docs/rag/embeddings.md) |
-| Vector store | `rag/vector_store/` | Cosine-similarity search; `InMemoryVectorStore` | [vector_store](docs/rag/vector_store.md) |
+| Vector store | `rag/vector_store/` | Cosine-similarity search; `InMemoryVectorStore`, `FAISSVectorStore`, `PgVectorStore`, `WeaviateVectorStore` | [vector_store](docs/rag/vector_store.md) |
 | Indexing | `rag/indexing/` | chunk → MD5 dedup → batch embed → upsert | [indexing](docs/rag/indexing.md) |
 | Retrieval | `rag/retrieval/` | Dense passage retrieval with metadata filtering | [retrieval](docs/rag/retrieval.md) |
 | Reranking | `rag/reranking/` | Score-based reranking; `FakeReranker`, `ScoreReranker` | [reranking](docs/rag/reranking.md) |
@@ -370,7 +370,8 @@ llm_agents_system/
       ingestion/                  IngestionPipeline, IngestionReport
     rag/
       embeddings/                 Embedder (Protocol), FakeEmbedder, BatchEmbedder
-      vector_store/               VectorStore (Protocol), InMemoryVectorStore, SearchResult
+      vector_store/               VectorStore (Protocol), InMemoryVectorStore, FAISSVectorStore,
+                                  PgVectorStore, WeaviateVectorStore, SearchResult
       indexing/                   Indexer, IndexReport
       retrieval/                  DenseRetriever, RetrievedPassage
       reranking/                  Reranker (Protocol), FakeReranker, ScoreReranker
@@ -395,7 +396,7 @@ llm_agents_system/
       benchmarking/               BenchmarkTask, Suite, BenchmarkRunner, BenchmarkReport
       hallucination/              HallucinationReport, HallucinationDetector (Protocol), OverlapDetector, LLMJudgeDetector
     config.py                     typed runtime settings (env + configs/)
-  tests/unit/                     mirrors src/ — one test file per module (633 tests)
+  tests/unit/                     mirrors src/ — one test file per module (749 passing)
   docs/                           per-module documentation
     index.md                      system overview, layer diagram, all flow diagrams
     infra/                        6 module docs
@@ -505,7 +506,10 @@ store (a noted future improvement).
 
 ## Implementation status
 
-All 30 modules are implemented and tested. The test suite has **633 tests, all passing**.
+All 30 modules are implemented and tested.  Three external vector-store adapters (FAISS,
+pgvector, Weaviate) add a further 141 tests on top of the 30-module baseline.
+The test suite has **749 tests passing** (1 skipped: faiss-cpu not installed in default
+dev env; 1 pre-existing failure: pydantic not installed without the `serving` extra).
 
 | Layer | Modules | Status |
 |---|---|---|
@@ -566,7 +570,7 @@ uv run python -m llm_agents.evaluation.benchmarking --suite <name>
 
 ## Future improvements
 
-- External vector-store adapters: FAISS, pgvector, Weaviate, Chroma, Elasticsearch.
+- External vector-store adapters: Chroma, Elasticsearch. (FAISS, pgvector, and Weaviate are implemented.)
 - External embeddings adapters: sentence-transformers, OpenAI embeddings API.
 - Concrete model-hub adapters for HuggingFace and GGUF (llama.cpp / vLLM).
 - NeMo Guardrails adapter behind `guardrails`.
@@ -589,7 +593,7 @@ Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/).
 # Install project + dev dependencies (light — no heavy ML/RAG deps)
 uv sync --extra dev
 
-# Run the full test suite (633 tests, all passing)
+# Run the full test suite (749 passing)
 uv run pytest
 
 # Run with short tracebacks and quiet output
@@ -611,7 +615,9 @@ uv run python -c "import llm_agents; print('ok')"
 Install only what a given task needs:
 
 ```bash
-uv sync --extra rag               # embeddings + local vector index (faiss, sentence-transformers)
+uv sync --extra rag               # embeddings + local FAISS vector index (faiss-cpu, sentence-transformers)
+uv sync --extra pgvector          # PostgreSQL pgvector adapter (psycopg + pgvector; needs running PG)
+uv sync --extra weaviate          # Weaviate HNSW adapter (weaviate-client>=4.6; needs running Weaviate)
 uv sync --extra local-inference   # llama.cpp / vLLM local model backends
 uv sync --extra training          # transformers + PEFT + MLflow fine-tuning
 uv sync --extra serving           # FastAPI + uvicorn
@@ -646,7 +652,7 @@ subclassing.  The table below lists the primary imports per layer.
 |---|---|---|---|
 | **rag** | `llm_agents.rag.pipeline` | `RagPipeline`, `GroundedAnswer` | [pipeline](docs/rag/pipeline.md) |
 | **rag** | `llm_agents.rag.embeddings` | `Embedder` (Protocol), `FakeEmbedder`, `BatchEmbedder` | [embeddings](docs/rag/embeddings.md) |
-| **rag** | `llm_agents.rag.vector_store` | `VectorStore` (Protocol), `InMemoryVectorStore`, `SearchResult` | [vector_store](docs/rag/vector_store.md) |
+| **rag** | `llm_agents.rag.vector_store` | `VectorStore` (Protocol), `InMemoryVectorStore`, `FAISSVectorStore`, `PgVectorStore`, `WeaviateVectorStore`, `SearchResult` | [vector_store](docs/rag/vector_store.md) |
 | **rag** | `llm_agents.rag.indexing` | `Indexer`, `IndexReport` | [indexing](docs/rag/indexing.md) |
 | **rag** | `llm_agents.rag.retrieval` | `DenseRetriever`, `RetrievedPassage` | [retrieval](docs/rag/retrieval.md) |
 | **rag** | `llm_agents.rag.reranking` | `Reranker` (Protocol), `ScoreReranker`, `FakeReranker` | [reranking](docs/rag/reranking.md) |
@@ -714,7 +720,36 @@ print(result.answer)
 print([p.doc_id for p in result.passages])
 ```
 
-#### 2. Ingest from a connector into a vector store
+#### 2. Swap to a FAISS, pgvector, or Weaviate backend
+
+All three adapters satisfy the `VectorStore` protocol and drop in anywhere `InMemoryVectorStore` is used:
+
+```python
+# FAISS (requires: uv sync --extra rag)
+from llm_agents.rag.vector_store import FAISSVectorStore
+store = FAISSVectorStore()                     # dimensions inferred from first upsert
+
+# pgvector (requires: uv sync --extra pgvector + running PostgreSQL with pgvector extension)
+import psycopg
+from llm_agents.rag.vector_store import PgVectorStore
+conn = psycopg.connect("postgresql://localhost/mydb")
+store = PgVectorStore(conn, table="rag_docs")  # table created on first upsert
+
+# Weaviate (requires: uv sync --extra weaviate + running Weaviate instance)
+import weaviate
+from llm_agents.rag.vector_store import WeaviateVectorStore
+client = weaviate.connect_to_local()
+store = WeaviateVectorStore(client, collection_name="RagDocs")
+
+# All three implement the same interface — swap into any pipeline without other changes:
+from llm_agents.rag.indexing import Indexer
+from llm_agents.rag.embeddings import FakeEmbedder
+indexer = Indexer(embedder=FakeEmbedder(dimensions=64), store=store)
+indexer.index("doc1", "Paris is the capital of France.", metadata={"text": "..."})
+results = store.search([0.1] * 64, top_k=5)
+```
+
+#### 3. Ingest from a connector into a vector store
 
 ```python
 import asyncio
@@ -748,7 +783,7 @@ report = asyncio.run(pipeline.ingest())
 print(f"fetched={report.fetched} upserted={report.upserted} skipped={report.skipped}")
 ```
 
-#### 3. Run guardrails on LLM output
+#### 4. Run guardrails on LLM output
 
 ```python
 from llm_agents.infra.guardrails import GuardrailChain, KeywordFilter, EmbeddingFilter
@@ -773,7 +808,7 @@ result = chain.run("Paris is the capital of France.")
 print(result.action)   # "pass"
 ```
 
-#### 4. Detect hallucination in a generated answer
+#### 5. Detect hallucination in a generated answer
 
 ```python
 from llm_agents.evaluation.hallucination import OverlapDetector, LLMJudgeDetector
@@ -802,7 +837,7 @@ report = judge.detect(answer="Paris is the capital.", references=references)
 print(report.groundedness_score)   # 0.85
 ```
 
-#### 5. Track a training experiment
+#### 6. Track a training experiment
 
 ```python
 from llm_agents.training.experiment_tracking import InMemoryTracker
@@ -838,7 +873,7 @@ print(result.metrics)       # {"loss": 0.25, "accuracy": 0.91}
 print(tracker.run_count)    # 1
 ```
 
-#### 6. Compare prompt variants
+#### 7. Compare prompt variants
 
 ```python
 from llm_agents.evaluation.prompts import compare, PromptVariant
@@ -863,7 +898,7 @@ for r in comparison.results:
     print(r.variant_name, r.score)
 ```
 
-#### 7. Launch the FastAPI serving app
+#### 8. Launch the FastAPI serving app
 
 ```python
 # app.py

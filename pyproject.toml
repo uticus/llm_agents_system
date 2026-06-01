@@ -45,6 +45,10 @@ pgvector = [
     "psycopg[binary]>=3.2",
     "pgvector>=0.3",
 ]
+# Weaviate vector-store adapter (requires a running Weaviate instance).
+weaviate = [
+    "weaviate-client>=4.6",
+]
 # Data connectors and document parsers for ingestion.
 data = [
     "psycopg[binary]>=3.2",
