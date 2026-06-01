@@ -6,6 +6,8 @@ Module path: `src/llm_agents/infra/cost_latency_optimization/`
 
 The cost_latency_optimization module reduces the monetary cost and wall-clock latency of LLM calls through three complementary mechanisms: a budget tracker, an in-memory completion cache, and a concurrent request batcher. The `BudgetTracker` accumulates token counts and estimated cost across a session so that agents and orchestrators can make data-driven decisions about model selection or early termination. The `CompletionCache` stores completed responses by a deterministic hash of the request parameters and serves cache hits without touching the network, eliminating latency and cost entirely for repeated or near-identical queries. The `Batcher` dispatches a list of independent LLM requests concurrently via `asyncio.gather`, saturating available concurrency rather than waiting for each request to finish sequentially. The three components are designed to be composed freely: a cache wraps a router, a batcher wraps a router, and a budget tracker consumes responses from any source.
 
+Additionally the module owns the **pluggable content-hash deduplication store** abstraction used by `data/ingestion` and `rag/indexing`. The `DeduplicationStore` Protocol defines a minimal set/persist interface. `InMemoryDeduplicationStore` is the default (fast, zero-config, state lost on restart). `SQLiteDeduplicationStore` is the durable variant (stdlib `sqlite3`, hashes survive process restarts), enabling incremental ingestion and indexing jobs that do not re-embed unchanged content on cold start.
+
 ---
 
 ## Public API
@@ -20,6 +22,9 @@ Import everything from `llm_agents.infra.cost_latency_optimization`.
 | `BudgetTracker` | class | Accumulates token counts and cost from `LLMResponse` objects. |
 | `CompletionCache` | class | In-memory LRU cache with TTL expiry for LLM completions. |
 | `Batcher` | class | Concurrent LLM request dispatcher using `asyncio.gather`. |
+| `DeduplicationStore` | Protocol | Interface for pluggable content-hash deduplication backends. |
+| `InMemoryDeduplicationStore` | class | Default in-memory dedup store; state lost on restart. |
+| `SQLiteDeduplicationStore` | class | Durable SQLite-backed dedup store; state persists across restarts. |
 
 ### `BudgetReport` (frozen dataclass fields)
 
@@ -74,6 +79,42 @@ class Batcher
 | Method | Signature | Description |
 |---|---|---|
 | `batch_complete` | `async (requests: list[LLMRequest]) -> list[LLMResponse \| BaseException]` | Dispatch all requests concurrently. Returns results in input order. Exceptions are not re-raised. |
+
+### `DeduplicationStore`
+
+```python
+class DeduplicationStore(Protocol):  # @runtime_checkable
+    def add(self, hash: str) -> None: ...
+    def __contains__(self, hash: str) -> bool: ...
+    def reset(self) -> None: ...
+    def __len__(self) -> int: ...
+```
+
+Any object that implements all four methods satisfies the protocol without inheritance.
+`isinstance(obj, DeduplicationStore)` works at runtime.
+
+### `InMemoryDeduplicationStore`
+
+```python
+class InMemoryDeduplicationStore:
+    def __init__(self) -> None: ...
+```
+
+Backed by a `set[str]`. State is lost when the process exits. This is the default used
+when no explicit `dedup_store` is provided to `IngestionPipeline` or `Indexer`.
+
+### `SQLiteDeduplicationStore`
+
+```python
+class SQLiteDeduplicationStore:
+    def __init__(self, path: str | Path) -> None: ...
+```
+
+Backed by a SQLite database file (stdlib `sqlite3`). Hashes are committed to disk on
+every `add()` call and survive process restarts. Pass `":memory:"` for an in-memory
+SQLite database (useful in tests that do not need persistence).
+
+Raises `sqlite3.OperationalError` if the directory containing `path` does not exist.
 
 ---
 
@@ -147,6 +188,10 @@ class Batcher
 
 - **Decision:** `force_refresh=True` on `cached_complete` bypasses the cache read but still writes back. **Why:** Allows callers to obtain a guaranteed-fresh response (e.g., after a model version change) while still populating the cache for subsequent callers. **Tradeoff:** If two concurrent callers both use `force_refresh=True` for the same request, both will issue provider calls and the second write will overwrite the first without any coordination.
 
+- **Decision:** `DeduplicationStore` is defined in this module, not in `data/` or `rag/`. **Why:** Both `data/ingestion` and `rag/indexing` need identical deduplication semantics; placing the Protocol here avoids a cross-subsystem dependency and aligns with the `infra` layer's role as a shared utility layer consumed by all higher layers. Both consumers re-export the three names from their own `__init__` for caller convenience. **Tradeoff:** A caller who only uses `IngestionPipeline` must transitively depend on `infra/cost_latency_optimization` even if they never use caching or batching, though this is a lightweight stdlib-only module.
+
+- **Decision:** `SQLiteDeduplicationStore.add()` commits after every single hash. **Why:** Guarantees that each `add()` call is immediately durable — a process crash between two `add()` calls will not lose the first hash. **Tradeoff:** N chunks per document means N SQLite commits, each involving an fsync-equivalent. A `add_batch()` method that wraps all inserts in a single transaction would be faster for bulk indexing at the cost of coarser durability granularity.
+
 ---
 
 ## Scaling concerns
@@ -161,6 +206,10 @@ class Batcher
 
 - **No distributed cache:** `CompletionCache` is in-process memory. Multiple worker processes or distributed nodes do not share a cache. A Redis-backed cache would be needed for multi-process deployments.
 
+- **`SQLiteDeduplicationStore` write amplification:** Each `add()` call issues a separate `INSERT OR IGNORE` + `COMMIT`. For a document with 100 chunks, this is 100 file-system syncs. On spinning disk this can be a throughput bottleneck. `add_batch()` (see Future improvements) is the mitigation.
+
+- **`SQLiteDeduplicationStore` unbounded growth:** The `hashes` table grows by one row per unique content hash and is never pruned. At one million hashes (32-byte strings + SQLite overhead ≈ ~100 bytes/row) the file is approximately 100 MB. Long-running ingestion jobs should schedule periodic `reset()` or use the planned TTL expiry feature.
+
 ---
 
 ## Future improvements
@@ -174,6 +223,14 @@ class Batcher
 - **Budget enforcement in BudgetTracker:** Add `cost_limit_usd: float` and `token_limit: int` thresholds with a `check_budget()` method that raises `BudgetExceededError` when a threshold is reached, allowing agents to self-limit automatically.
 
 - **Cache warming:** Add a `warm(pairs: list[tuple[LLMRequest, LLMResponse]])` method to `CompletionCache` that pre-populates the cache from a known set of request/response pairs, useful for seeding from a golden dataset.
+
+- **`DeduplicationStore.add_batch(hashes)`:** A single SQLite transaction for multiple hashes reduces write latency from O(N commits) to O(1) for bulk indexing workloads while preserving atomicity at the batch boundary.
+
+- **`SQLiteDeduplicationStore` connection lifecycle:** Add `close()`/`__enter__`/`__exit__` for deterministic file-handle release in long-running services and test harnesses.
+
+- **`SQLiteDeduplicationStore` TTL-based expiry:** A `ttl_days: int | None` constructor parameter that records each hash's insertion timestamp and prunes rows older than N days, preventing unbounded database growth in continuous ingestion jobs.
+
+- **Cross-process `RedisDeduplicationStore`:** For multi-worker deployments where multiple processes share one ingestion pipeline, a Redis-backed store with server-side TTL would provide shared dedup state without changing any consumer interface.
 
 ---
 

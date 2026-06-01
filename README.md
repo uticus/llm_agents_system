@@ -294,7 +294,7 @@ FineTuneResult(model_path, metrics, run_id, artifact_uri)
 |---|---|---|---|
 | Model hub | `infra/model_hub/` | Load/version models across OpenAI, HuggingFace, GGUF (llama.cpp/vLLM); versioned checkpoint registration and rollback via `MLflowVersionLogger` | [model_hub](docs/infra/model_hub.md) |
 | Inference routing | `infra/inference_routing/` | Route across providers/models by policy; retry + fallback | [inference_routing](docs/infra/inference_routing.md) |
-| Cost/latency optimization | `infra/cost_latency_optimization/` | LRU cache, async batcher, budget tracker | [cost_latency_optimization](docs/infra/cost_latency_optimization.md) |
+| Cost/latency optimization | `infra/cost_latency_optimization/` | LRU cache, async batcher, budget tracker, pluggable dedup store | [cost_latency_optimization](docs/infra/cost_latency_optimization.md) |
 | Guardrails | `infra/guardrails/` | Keyword / embedding filter chain; `NeMoGuard` adapter for NVIDIA NeMo Guardrails | [guardrails](docs/infra/guardrails.md) |
 | Tracing | `infra/tracing/` | Async-safe spans across agent, tool, and LLM calls | [tracing](docs/infra/tracing.md) |
 | Observability | `infra/observability/` | Prometheus metrics, JSON structured logging, span bridge | [observability](docs/infra/observability.md) |
@@ -362,7 +362,9 @@ llm_agents_system/
       tracing/                    Span, SpanContext, FinishedSpan, Tracer, InMemoryCollector
       observability/              MetricsRegistry, JSONFormatter, bridge_span
       inference_routing/          Router, RoutingPolicy, Candidate
-      cost_latency_optimization/  CompletionCache, Batcher, BudgetTracker
+      cost_latency_optimization/  CompletionCache, Batcher, BudgetTracker,
+                                  DeduplicationStore (Protocol),
+                                  InMemoryDeduplicationStore, SQLiteDeduplicationStore
       model_hub/                  ModelHub, ModelBackend (Protocol), OpenAIBackend,
                                   HuggingFaceBackend, LlamaCppBackend, VLLMBackend,
                                   MLflowVersionLogger
@@ -370,14 +372,18 @@ llm_agents_system/
     data/
       connectors/                 Document, Connector (Protocol), FakeConnector
       parsers/                    ParsedDocument, DocumentParser (Protocol), TextParser, ParserRegistry
-      ingestion/                  IngestionPipeline, IngestionReport
+      ingestion/                  IngestionPipeline, IngestionReport,
+                                  DeduplicationStore, InMemoryDeduplicationStore,
+                                  SQLiteDeduplicationStore (re-exported from infra)
     rag/
       embeddings/                 Embedder (Protocol), FakeEmbedder, BatchEmbedder,
                                   SentenceTransformerEmbedder, OpenAIEmbedder, CohereEmbedder
       vector_store/               VectorStore (Protocol), InMemoryVectorStore, FAISSVectorStore,
                                   PgVectorStore, WeaviateVectorStore, ChromaVectorStore,
                                   ElasticsearchVectorStore, SearchResult
-      indexing/                   Indexer, IndexReport
+      indexing/                   Indexer, IndexReport,
+                                  DeduplicationStore, InMemoryDeduplicationStore,
+                                  SQLiteDeduplicationStore (re-exported from infra)
       retrieval/                  DenseRetriever, RetrievedPassage
       reranking/                  Reranker (Protocol), FakeReranker, ScoreReranker
       pipeline/                   RagPipeline, GroundedAnswer
@@ -461,8 +467,9 @@ unit tests. No mocking frameworks needed.
 MD5 hashes guard against redundant work at two levels in the ingestion/indexing path:
 - Document level in `IngestionPipeline` — skips re-parsing unchanged documents.
 - Chunk level in `Indexer` — skips re-embedding unchanged chunks.
-Both levels use an in-process `set[str]`; durability across restarts requires an external
-store (a noted future improvement).
+Both levels use a pluggable `DeduplicationStore` (from `infra/cost_latency_optimization`).
+The default is `InMemoryDeduplicationStore` (fast, state lost on restart). Pass
+`SQLiteDeduplicationStore` for durable incremental runs that survive process restarts.
 
 **Async-safe tracing.**
 `contextvars.ContextVar` (not thread-local storage) propagates the active span across
@@ -606,6 +613,55 @@ HotpotQA multi-hop; cost — mean USD per completed task; cache hit — fraction
   (raise an exception) before the router is ever invoked, with an optional soft-warning
   threshold (e.g. 80 %) that fires before the hard block.
 
+- **`DeduplicationStore` — batch add.** `SQLiteDeduplicationStore.add()` commits after
+  every single hash, which is correct for durability but expensive when indexing a large
+  document with many chunks (N commits per document). A `add_batch(hashes: list[str])`
+  method that wraps all inserts in one transaction would cut write latency from O(N) to
+  O(1) round-trips while preserving atomicity at the batch boundary.
+
+- **`SQLiteDeduplicationStore` — connection lifecycle.** There is no explicit `close()`
+  or context-manager support; callers rely on GC to release the file handle. Adding
+  `__enter__`/`__exit__`/`close()` would enable deterministic cleanup and make the store
+  usable with `with` statements, which matters in long-running services and test harnesses.
+
+- **`SQLiteDeduplicationStore` — TTL-based hash expiry.** The store grows without bound
+  as long as new content is indexed. A `ttl_days: int | None` constructor parameter that
+  records each hash's insertion timestamp and prunes rows older than N days would keep
+  database size bounded for continuous ingestion jobs without requiring manual `reset()`.
+
+- **Cross-process `RedisDeduplicationStore`.** The current backends are single-process.
+  Multi-worker deployments (multiple ingestion pods) need a shared dedup state so one pod
+  does not re-index content already processed by another. A `RedisDeduplicationStore`
+  backed by a `SET` data structure with optional TTL would satisfy this without changing
+  the consumer interface.
+
+- **Durable cursor persistence in `IngestionPipeline`.** The last `since_cursor` is not
+  persisted alongside the dedup store. On restart, the connector re-fetches all documents
+  from the beginning, relying on dedup to skip seen content. Storing the cursor in the
+  same SQLite database as the hashes would enable truly resumable incremental ingestion
+  with no redundant fetches.
+
+- **Async `upsert` support in `IngestionPipeline`.** The `upsert` callable is
+  synchronous. When it delegates to a remote vector database, each call blocks the asyncio
+  event loop for a network round-trip. Accepting `Callable[[Any], Awaitable[None]]` and
+  awaiting it inside `ingest` would allow high-throughput non-blocking writes without
+  wrapping the callable in `run_in_executor`.
+
+- **Parallel document processing in `IngestionPipeline`.** Documents are processed
+  sequentially. When parsing is the bottleneck (e.g. PDF extraction), `asyncio.gather`
+  with a configurable semaphore would pipeline fetch, parse, and upsert across multiple
+  documents concurrently.
+
+- **Async `index`/`index_batch` in `Indexer`.** Same rationale as above: making the
+  embedder and vector-store calls awaitable would enable non-blocking indexing inside
+  async application servers.
+
+- **Cross-chunk dedup correctness in `Indexer`.** The current dedup key is
+  `content_hash(chunk_text)` alone. Two different documents that share an identical chunk
+  (e.g. a boilerplate header) would have the second occurrence skipped, even though it
+  should produce a distinct entry under a different chunk ID. Changing the key to
+  `(doc_id, chunk_index, content_hash)` would fix this without affecting the common case.
+
 ---
 
 ## Getting started
@@ -681,12 +737,12 @@ subclassing.  The table below lists the primary imports per layer.
 | **rag** | `llm_agents.rag.pipeline` | `RagPipeline`, `GroundedAnswer` | [pipeline](docs/rag/pipeline.md) |
 | **rag** | `llm_agents.rag.embeddings` | `Embedder` (Protocol), `FakeEmbedder`, `BatchEmbedder`, `SentenceTransformerEmbedder`, `OpenAIEmbedder`, `CohereEmbedder` | [embeddings](docs/rag/embeddings.md) |
 | **rag** | `llm_agents.rag.vector_store` | `VectorStore` (Protocol), `InMemoryVectorStore`, `FAISSVectorStore`, `PgVectorStore`, `WeaviateVectorStore`, `ChromaVectorStore`, `ElasticsearchVectorStore`, `SearchResult` | [vector_store](docs/rag/vector_store.md) |
-| **rag** | `llm_agents.rag.indexing` | `Indexer`, `IndexReport` | [indexing](docs/rag/indexing.md) |
+| **rag** | `llm_agents.rag.indexing` | `Indexer`, `IndexReport`, `DeduplicationStore`, `InMemoryDeduplicationStore`, `SQLiteDeduplicationStore` | [indexing](docs/rag/indexing.md) |
 | **rag** | `llm_agents.rag.retrieval` | `DenseRetriever`, `RetrievedPassage` | [retrieval](docs/rag/retrieval.md) |
 | **rag** | `llm_agents.rag.reranking` | `Reranker` (Protocol), `ScoreReranker`, `FakeReranker` | [reranking](docs/rag/reranking.md) |
 | **data** | `llm_agents.data.connectors` | `Connector` (Protocol), `FakeConnector`, `Document` | [connectors](docs/data/connectors.md) |
 | **data** | `llm_agents.data.parsers` | `DocumentParser` (Protocol), `TextParser`, `ParserRegistry` | [parsers](docs/data/parsers.md) |
-| **data** | `llm_agents.data.ingestion` | `IngestionPipeline`, `IngestionReport` | [ingestion](docs/data/ingestion.md) |
+| **data** | `llm_agents.data.ingestion` | `IngestionPipeline`, `IngestionReport`, `DeduplicationStore`, `InMemoryDeduplicationStore`, `SQLiteDeduplicationStore` | [ingestion](docs/data/ingestion.md) |
 | **core** | `llm_agents.core.agent_memory` | `Memory`, `ShortTermMemory`, `LongTermMemory`, `MemoryEntry` | [agent_memory](docs/core/agent_memory.md) |
 | **core** | `llm_agents.core.planning` | `Planner` (Protocol), `SimplePlanner`, `ReactivePlanner`, `Plan`, `Step` | [planning](docs/core/planning.md) |
 | **core** | `llm_agents.core.tool_orchestration` | `Tool` (Protocol), `ToolRegistry`, `ToolOrchestrator` | [tool_orchestration](docs/core/tool_orchestration.md) |
@@ -699,7 +755,7 @@ subclassing.  The table below lists the primary imports per layer.
 | **infra** | `llm_agents.infra.inference_routing` | `Router`, `RoutingPolicy`, `Candidate` | [inference_routing](docs/infra/inference_routing.md) |
 | **infra** | `llm_agents.infra.model_hub` | `ModelHub`, `ModelBackend` (Protocol), `OpenAIBackend`, `HuggingFaceBackend`, `LlamaCppBackend`, `VLLMBackend`, `MLflowVersionLogger` | [model_hub](docs/infra/model_hub.md) |
 | **infra** | `llm_agents.infra.guardrails` | `GuardrailChain`, `KeywordFilter`, `EmbeddingFilter`, `NeMoGuard` | [guardrails](docs/infra/guardrails.md) |
-| **infra** | `llm_agents.infra.cost_latency_optimization` | `CompletionCache`, `Batcher`, `BudgetTracker` | [cost_latency_optimization](docs/infra/cost_latency_optimization.md) |
+| **infra** | `llm_agents.infra.cost_latency_optimization` | `CompletionCache`, `Batcher`, `BudgetTracker`, `DeduplicationStore`, `InMemoryDeduplicationStore`, `SQLiteDeduplicationStore` | [cost_latency_optimization](docs/infra/cost_latency_optimization.md) |
 | **evaluation** | `llm_agents.evaluation.hallucination` | `OverlapDetector`, `LLMJudgeDetector`, `HallucinationReport` | [hallucination](docs/evaluation/hallucination.md) |
 | **evaluation** | `llm_agents.evaluation.framework` | `EvalHarness`, `EvalReport`, `Metric` (Protocol) | [framework](docs/evaluation/framework.md) |
 | **evaluation** | `llm_agents.evaluation.benchmarking` | `BenchmarkRunner`, `Suite`, `BenchmarkTask`, `BUILTIN_SUITES`, `BUILTIN_AGENTS` | [benchmarking](docs/evaluation/benchmarking.md) |

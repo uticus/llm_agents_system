@@ -157,7 +157,7 @@ FineTuneResult(model_path, metrics, run_id, artifact_uri)
 | tracing | Span lifecycle, async-safe context propagation, `InMemoryCollector` | [infra/tracing.md](infra/tracing.md) |
 | observability | Prometheus metrics, JSON structured logging, span bridge | [infra/observability.md](infra/observability.md) |
 | inference_routing | Multi-backend retry + fallback, `RoutingPolicy`, span instrumentation | [infra/inference_routing.md](infra/inference_routing.md) |
-| cost_latency_optimization | LRU completion cache, async request batcher, budget tracker | [infra/cost_latency_optimization.md](infra/cost_latency_optimization.md) |
+| cost_latency_optimization | LRU completion cache, async request batcher, budget tracker, pluggable content-hash deduplication store | [infra/cost_latency_optimization.md](infra/cost_latency_optimization.md) |
 | model_hub | Backend registry, `ModelBackend` Protocol, `OpenAIBackend`, `HuggingFaceBackend`, `LlamaCppBackend`, `VLLMBackend`, `FakeBackend`; versioned checkpoint registration and rollback via `MLflowVersionLogger` | [infra/model_hub.md](infra/model_hub.md) |
 | guardrails | Keyword / embedding / LLM filter chain, `GuardResult`; `NeMoGuard` adapter for NVIDIA NeMo Guardrails | [infra/guardrails.md](infra/guardrails.md) |
 
@@ -179,7 +179,7 @@ FineTuneResult(model_path, metrics, run_id, artifact_uri)
 |---|---|---|
 | connectors | `Document`, `Connector` Protocol, `FakeConnector` (cursor-based incremental fetch) | [data/connectors.md](data/connectors.md) |
 | parsers | `ParsedDocument`, `DocumentParser` Protocol, `TextParser`, `ParserRegistry` | [data/parsers.md](data/parsers.md) |
-| ingestion | `IngestionPipeline` (fetch → dedup → parse → chunk → upsert), `IngestionReport` | [data/ingestion.md](data/ingestion.md) |
+| ingestion | `IngestionPipeline` (fetch → dedup → parse → chunk → upsert), `IngestionReport`, `DeduplicationStore`, `InMemoryDeduplicationStore`, `SQLiteDeduplicationStore` | [data/ingestion.md](data/ingestion.md) |
 
 ### rag — retrieval-augmented generation
 
@@ -187,7 +187,7 @@ FineTuneResult(model_path, metrics, run_id, artifact_uri)
 |---|---|---|
 | embeddings | `Embedder` Protocol, `FakeEmbedder`, `BatchEmbedder`, `SentenceTransformerEmbedder` (`rag` extra), `OpenAIEmbedder` (`openai` extra), `CohereEmbedder` (`cohere` extra) | [rag/embeddings.md](rag/embeddings.md) |
 | vector_store | `VectorStore` Protocol, `InMemoryVectorStore` (cosine similarity), `FAISSVectorStore` (FAISS flat/cosine, `rag` extra), `PgVectorStore` (pgvector IVFFlat, `pgvector` extra), `WeaviateVectorStore` (Weaviate HNSW, `weaviate` extra), `ChromaVectorStore` (Chroma HNSW, `chroma` extra), `ElasticsearchVectorStore` (ES 8+ dense_vector knn, `elasticsearch` extra), `SearchResult` | [rag/vector_store.md](rag/vector_store.md) |
-| indexing | `Indexer` (chunk → MD5 dedup → batch embed → upsert), `IndexReport` | [rag/indexing.md](rag/indexing.md) |
+| indexing | `Indexer` (chunk → MD5 dedup → batch embed → upsert), `IndexReport`, `DeduplicationStore`, `InMemoryDeduplicationStore`, `SQLiteDeduplicationStore` | [rag/indexing.md](rag/indexing.md) |
 | retrieval | `DenseRetriever` (embed → search → filter), `RetrievedPassage` | [rag/retrieval.md](rag/retrieval.md) |
 | reranking | `Reranker` Protocol, `FakeReranker`, `ScoreReranker` | [rag/reranking.md](rag/reranking.md) |
 | pipeline | `RagPipeline` (retrieve → rerank → generate), `GroundedAnswer` | [rag/pipeline.md](rag/pipeline.md) |
@@ -238,8 +238,9 @@ in unit tests.
 MD5 hashes are used at two levels in the ingestion/indexing path:
 - Document level in `IngestionPipeline` — skips re-parsing unchanged documents.
 - Chunk level in `Indexer` — skips re-embedding unchanged chunks.
-Both levels use in-process `set[str]`; durability across restarts requires an external
-store (documented as a scaling concern in each module's doc).
+Both levels use a pluggable `DeduplicationStore` from `infra/cost_latency_optimization`.
+The default `InMemoryDeduplicationStore` is fast and zero-config; pass
+`SQLiteDeduplicationStore` for durable incremental runs that survive process restarts.
 
 **Async-safe tracing.**
 `contextvars.ContextVar` (not thread-local storage) propagates the active span across
@@ -343,7 +344,9 @@ src/llm_agents/
     tracing/             Span, SpanContext, InMemoryCollector
     observability/       MetricsRegistry, JSONFormatter, bridge_span
     inference_routing/   Router, RoutingPolicy, Candidate
-    cost_latency_optimization/  CompletionCache, Batcher, BudgetTracker
+    cost_latency_optimization/  CompletionCache, Batcher, BudgetTracker,
+                             DeduplicationStore (Protocol),
+                             InMemoryDeduplicationStore, SQLiteDeduplicationStore
     model_hub/           ModelHub, OpenAIBackend, HuggingFaceBackend,
                          LlamaCppBackend, VLLMBackend, FakeBackend,
                          MLflowVersionLogger
@@ -360,14 +363,18 @@ src/llm_agents/
   data/
     connectors/          Document, Connector, FakeConnector
     parsers/             ParsedDocument, DocumentParser, TextParser, ParserRegistry
-    ingestion/           IngestionPipeline, IngestionReport
+    ingestion/           IngestionPipeline, IngestionReport,
+                         DeduplicationStore, InMemoryDeduplicationStore,
+                         SQLiteDeduplicationStore (re-exported from infra)
   rag/
     embeddings/          Embedder, FakeEmbedder, BatchEmbedder,
                          SentenceTransformerEmbedder, OpenAIEmbedder, CohereEmbedder
     vector_store/        VectorStore, InMemoryVectorStore, FAISSVectorStore,
                          PgVectorStore, WeaviateVectorStore, ChromaVectorStore,
                          ElasticsearchVectorStore, SearchResult
-    indexing/            Indexer, IndexReport
+    indexing/            Indexer, IndexReport,
+                         DeduplicationStore, InMemoryDeduplicationStore,
+                         SQLiteDeduplicationStore (re-exported from infra)
     retrieval/           DenseRetriever, RetrievedPassage
     reranking/           Reranker, FakeReranker, ScoreReranker
     pipeline/            RagPipeline, GroundedAnswer
