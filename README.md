@@ -273,14 +273,15 @@ rag/vector_store  (VectorStore.upsert)
 ### Training / fine-tuning flow
 
 ```
-training/datasets  (DatasetLoader.from_jsonl / from_prodigy)
+training/datasets  (DatasetLoader.from_jsonl / from_prodigy / DeltaTableLoader.load)
     |  Dataset.split(train_ratio) -> (train, val)
+    |  DvcDataVersioner.add / push / pull  [optional file versioning]
     v
 training/fine_tuning  (FineTuner.run)
     |  trainer_factory -> train -> save -> get_metrics
     v
 training/experiment_tracking  (Tracker.log_metrics / log_params)
-    |  NoOpTracker (prod) or InMemoryTracker (tests)
+    |  MLflowTracker (prod) | NoOpTracker | InMemoryTracker (tests)
     v
 FineTuneResult(model_path, metrics, run_id, artifact_uri)
 ```
@@ -340,8 +341,8 @@ FineTuneResult(model_path, metrics, run_id, artifact_uri)
 | Subsystem | Package | Responsibility | Doc |
 |---|---|---|---|
 | Fine-tuning | `training/fine_tuning/` | `FineTuner` + `peft_trainer_factory` (default); `PeftTrainer` wraps HuggingFace Trainer; QLoRA via `use_4bit=True` | [fine_tuning](docs/training/fine_tuning.md) |
-| Datasets | `training/datasets/` | `Dataset` (split, validate, version hash); Prodigy normaliser | [datasets](docs/training/datasets.md) |
-| Experiment tracking | `training/experiment_tracking/` | `Tracker` Protocol; `NoOpTracker`, `InMemoryTracker` | [experiment_tracking](docs/training/experiment_tracking.md) |
+| Datasets | `training/datasets/` | `Dataset` (split, validate, version hash); Prodigy normaliser; `DeltaTableLoader` (Delta Lake, `delta-lake` extra); `DvcDataVersioner` (DVC CLI wrapper, `tracking` extra) | [datasets](docs/training/datasets.md) |
+| Experiment tracking | `training/experiment_tracking/` | `Tracker` Protocol; `NoOpTracker`, `InMemoryTracker`; `MLflowTracker` (production MLflow adapter, `training` extra) | [experiment_tracking](docs/training/experiment_tracking.md) |
 
 #### `evaluation/` — offline evaluation
 
@@ -393,15 +394,17 @@ llm_agents_system/
     training/
       fine_tuning/                FineTuner, FineTuneConfig, FineTuneResult,
                                   PeftTrainer, peft_trainer_factory
-      datasets/                   Dataset, Example, DatasetLoader, from_prodigy
-      experiment_tracking/        Tracker (Protocol), NoOpTracker, InMemoryTracker
+      datasets/                   Dataset, Example, DatasetLoader, from_prodigy,
+                                  DeltaTableLoader, DvcDataVersioner
+      experiment_tracking/        Tracker (Protocol), NoOpTracker, InMemoryTracker,
+                                  MLflowTracker
     evaluation/
       framework/                  EvalCase, EvalResult, EvalReport, EvalHarness, Metric (Protocol)
       prompts/                    PromptVariant, VariantResult, PromptComparison, compare
       benchmarking/               BenchmarkTask, Suite, BenchmarkRunner, BenchmarkReport
       hallucination/              HallucinationReport, HallucinationDetector (Protocol), OverlapDetector, LLMJudgeDetector
     config.py                     typed runtime settings (env + configs/)
-  tests/unit/                     mirrors src/ — one test file per module (1168 passing with --extra dev --extra rag --extra serving)
+  tests/unit/                     mirrors src/ — one test file per module (1233 passing with --extra dev --extra rag --extra serving)
   docs/                           per-module documentation
     index.md                      system overview, layer diagram, all flow diagrams
     infra/                        6 module docs
@@ -513,9 +516,9 @@ store (a noted future improvement).
 
 All 30 modules are implemented and tested.  Five external vector-store adapters, three
 embedder adapters, three model-hub backends, MLflow version tracking, the NeMo Guardrails
-adapter, and the PEFT/QLoRA trainer factory add a further 509 tests on top of the
-30-module baseline.  The test suite has **1168 tests passing** with
-`uv sync --extra dev --extra rag --extra serving` (0 skipped).
+adapter, the PEFT/QLoRA trainer factory, and the MLflow/DVC/Delta Lake data-versioning
+integration add a further 574 tests on top of the 30-module baseline.  The test suite has
+**1233 tests passing** with `uv sync --extra dev --extra rag --extra serving` (0 skipped).
 
 | Layer | Modules | Status |
 |---|---|---|
@@ -576,7 +579,6 @@ uv run python -m llm_agents.evaluation.benchmarking --suite <name>
 
 ## Future improvements
 
-- MLflow model registry and DVC / Delta Lake data versioning integration.
 - Implement concrete benchmark task suites (`evaluation/benchmarking/` harness is ready; suites are not yet defined); replace the current projected illustrative values with actually measured results.
 - Per-tenant budget enforcement.
 - `async` inference client for concurrent step execution in `hierarchical_agents`.
@@ -593,7 +595,7 @@ Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/).
 # Install project + dev dependencies (light — no heavy ML/RAG deps)
 uv sync --extra dev --extra rag --extra serving
 
-# Run the full test suite (1168 passing)
+# Run the full test suite (1233 passing)
 uv run pytest
 
 # Run with short tracebacks and quiet output
@@ -682,8 +684,8 @@ subclassing.  The table below lists the primary imports per layer.
 | **evaluation** | `llm_agents.evaluation.benchmarking` | `BenchmarkRunner`, `Suite`, `BenchmarkTask` | [benchmarking](docs/evaluation/benchmarking.md) |
 | **evaluation** | `llm_agents.evaluation.prompts` | `compare`, `PromptComparison`, `PromptVariant` | [prompts](docs/evaluation/prompts.md) |
 | **training** | `llm_agents.training.fine_tuning` | `FineTuner`, `FineTuneConfig`, `FineTuneResult`, `PeftTrainer`, `peft_trainer_factory` | [fine_tuning](docs/training/fine_tuning.md) |
-| **training** | `llm_agents.training.datasets` | `Dataset`, `DatasetLoader`, `from_prodigy`, `Example` | [datasets](docs/training/datasets.md) |
-| **training** | `llm_agents.training.experiment_tracking` | `Tracker` (Protocol), `NoOpTracker`, `InMemoryTracker` | [experiment_tracking](docs/training/experiment_tracking.md) |
+| **training** | `llm_agents.training.datasets` | `Dataset`, `DatasetLoader`, `from_prodigy`, `Example`, `DeltaTableLoader`, `DvcDataVersioner` | [datasets](docs/training/datasets.md) |
+| **training** | `llm_agents.training.experiment_tracking` | `Tracker` (Protocol), `NoOpTracker`, `InMemoryTracker`, `MLflowTracker` | [experiment_tracking](docs/training/experiment_tracking.md) |
 | **serving** | `llm_agents.serving.api` | `create_app`, `build_router`, `ChatRequest`, `RagRequest` | [api](docs/serving/api.md) |
 
 ---
@@ -1059,6 +1061,85 @@ embedder = CohereEmbedder(model="embed-english-v3.0")
 # Both satisfy the Embedder Protocol — drop in wherever FakeEmbedder or
 # SentenceTransformerEmbedder is used; no other changes required
 indexer = Indexer(embedder=embedder, store=store)
+```
+
+#### 12. Track fine-tuning experiments with MLflow
+
+```python
+# requires: uv sync --extra training
+from llm_agents.training.experiment_tracking import MLflowTracker
+from llm_agents.training.fine_tuning import FineTuneConfig, FineTuner
+
+tracker = MLflowTracker(
+    tracking_uri="http://mlflow.internal:5000",
+    experiment_name="llama-finetune",
+)
+config = FineTuneConfig(
+    base_model="meta-llama/Llama-2-7b-hf",
+    output_dir="/checkpoints/run1",
+    num_epochs=3,
+    learning_rate=2e-4,
+    lora_r=16,
+    lora_alpha=32,
+)
+tuner = FineTuner(config=config, tracker=tracker)
+result = tuner.run(dataset=my_dataset)
+# Params and metrics are visible in the MLflow UI at http://mlflow.internal:5000
+print(result.run_id)    # MLflow run ID
+print(result.metrics)   # {"train_loss": ..., ...}
+```
+
+```python
+# Log to MLflow standalone — without FineTuner
+from llm_agents.training.experiment_tracking import MLflowTracker
+
+tracker = MLflowTracker(experiment_name="manual-sweep")
+run_id = tracker.start_run("lr-1e-3", config={"lr": 1e-3, "epochs": 5})
+for step, loss in enumerate([0.8, 0.6, 0.45, 0.31, 0.22]):
+    tracker.log_metrics({"train_loss": loss}, step=step)
+tracker.log_params({"architecture": "gpt2"})
+tracker.end_run(run_id)
+```
+
+#### 13. Load versioned Delta Lake datasets and track files with DVC
+
+```python
+# Load a versioned Delta Lake table as a Dataset
+# requires: uv sync --extra delta-lake
+from llm_agents.training.datasets import DeltaTableLoader
+
+# Latest snapshot
+ds = DeltaTableLoader.load("/data/delta/intent_dataset")
+print(len(ds), ds.name)   # "intent_dataset"
+
+# Specific historical version
+ds_v3 = DeltaTableLoader.load("/data/delta/intent_dataset", version=3, name="intent-v3")
+
+# Custom column names; extra columns go to Example.metadata
+ds = DeltaTableLoader.load(
+    "/data/delta/chat_labels",
+    text_column="utterance",
+    label_column="intent",
+)
+print(ds.examples[0].metadata)   # {"source": "prod", "confidence": 0.97, ...}
+```
+
+```python
+# Version dataset files with DVC
+# requires: uv sync --extra tracking  (also needs: dvc init in repo root)
+from llm_agents.training.datasets import DvcDataVersioner
+
+dvc = DvcDataVersioner(repo_path="/my/project")
+
+dvc.add("data/train.jsonl")          # track with DVC; creates data/train.jsonl.dvc
+dvc.push(remote="my-s3")             # upload to remote
+
+# On another machine / in CI:
+dvc.pull(path="data/train.jsonl", remote="my-s3")
+
+# Inspect which files are out of sync:
+status = dvc.status()
+print(status)   # {} (clean) or {"data/train.jsonl": ["modified"]}
 ```
 
 ---

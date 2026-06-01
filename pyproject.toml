@@ -70,6 +70,10 @@ cohere = [
 nemo = [
     "nemoguardrails>=0.9",
 ]
+# Delta Lake versioned table loader (pure-Python delta-rs, no Spark required).
+delta-lake = [
+    "deltalake>=0.18",
+]
 # Data connectors and document parsers for ingestion.
 data = [
     "psycopg[binary]>=3.2",
