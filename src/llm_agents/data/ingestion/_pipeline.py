@@ -3,6 +3,12 @@
 Content-hash deduplication uses MD5 over the raw document content.  Chunks
 whose parent document was seen in a previous run are skipped without calling
 the upsert callable.
+
+Deduplication state is managed by a pluggable ``DeduplicationStore``.
+The default store is ``InMemoryDeduplicationStore``
+(in-process; lost on restart).  Pass a
+:class:`~llm_agents.infra.cost_latency_optimization.SQLiteDeduplicationStore` to persist
+hashes across process restarts.
 """
 
 from __future__ import annotations
@@ -13,6 +19,10 @@ from typing import Any
 
 from llm_agents.data.ingestion._models import IngestionReport
 from llm_agents.data.parsers._models import ParsedDocument
+from llm_agents.infra.cost_latency_optimization._dedup import (
+    DeduplicationStore,
+    InMemoryDeduplicationStore,
+)
 
 
 def _md5(text: str) -> str:
@@ -23,20 +33,20 @@ class IngestionPipeline:
     """Orchestrates the fetch -> parse -> chunk -> dedup -> upsert flow.
 
     Args:
-        connector: Any object satisfying the :class:`~llm_agents.data.connectors.Connector`
-                   protocol.
-        parser:    Any object satisfying the :class:`~llm_agents.data.parsers.DocumentParser`
-                   protocol.
-        chunker:   Callable ``(parsed: ParsedDocument) -> list[Any]``.
-                   Returns a list of chunks (strings or arbitrary objects).
-                   May return an empty list to skip a document.
-        upsert:    Callable ``(chunk: Any) -> None``.
-                   Called once for each non-deduplicated chunk.
-
-    Attributes:
-        _seen_hashes: Set of MD5 hashes of document contents seen in previous
-                      or current runs.  Persists across multiple calls to
-                      :meth:`ingest` on the same pipeline instance.
+        connector:   Any object satisfying the :class:`~llm_agents.data.connectors.Connector`
+                     protocol.
+        parser:      Any object satisfying the :class:`~llm_agents.data.parsers.DocumentParser`
+                     protocol.
+        chunker:     Callable ``(parsed: ParsedDocument) -> list[Any]``.
+                     Returns a list of chunks (strings or arbitrary objects).
+                     May return an empty list to skip a document.
+        upsert:      Callable ``(chunk: Any) -> None``.
+                     Called once for each non-deduplicated chunk.
+        dedup_store: Optional ``DeduplicationStore`` for tracking seen content
+                     hashes.  Defaults to ``InMemoryDeduplicationStore``
+                     (state lost on restart).  Pass
+                     ``SQLiteDeduplicationStore`` to persist hashes across
+                     process restarts.
     """
 
     def __init__(
@@ -45,12 +55,16 @@ class IngestionPipeline:
         parser: Any,
         chunker: Callable[[ParsedDocument], list[Any]],
         upsert: Callable[[Any], None],
+        *,
+        dedup_store: DeduplicationStore | None = None,
     ) -> None:
         self._connector = connector
         self._parser = parser
         self._chunker = chunker
         self._upsert = upsert
-        self._seen_hashes: set[str] = set()
+        self._dedup_store: DeduplicationStore = (
+            dedup_store if dedup_store is not None else InMemoryDeduplicationStore()
+        )
 
     async def ingest(self, since_cursor: Any = None) -> IngestionReport:
         """Run one ingestion pass.
@@ -72,7 +86,7 @@ class IngestionPipeline:
             report.fetched += 1
             content_hash = _md5(doc.content)
 
-            if content_hash in self._seen_hashes:
+            if content_hash in self._dedup_store:
                 report.skipped += 1
                 continue
 
@@ -88,7 +102,7 @@ class IngestionPipeline:
                 continue
 
             report.parsed += 1
-            self._seen_hashes.add(content_hash)
+            self._dedup_store.add(content_hash)
 
             # Chunk
             chunks = self._chunker(parsed)
@@ -103,8 +117,8 @@ class IngestionPipeline:
     @property
     def seen_count(self) -> int:
         """Number of unique content hashes accumulated so far."""
-        return len(self._seen_hashes)
+        return len(self._dedup_store)
 
     def reset_dedup(self) -> None:
-        """Clear the deduplication hash set (start fresh next run)."""
-        self._seen_hashes.clear()
+        """Clear the deduplication store (start fresh next run)."""
+        self._dedup_store.reset()

@@ -12,6 +12,9 @@ The indexing module bridges the data ingestion tier and the vector retrieval tie
 |---|---|---|
 | `Indexer` | class | Chunk -> embed -> upsert pipeline that populates a vector store. |
 | `IndexReport` | dataclass | Per-run statistics: docs indexed, chunks added/skipped, errors. |
+| `DeduplicationStore` | Protocol | Interface for pluggable content-hash deduplication backends. |
+| `InMemoryDeduplicationStore` | class | Default in-memory dedup store (state lost on restart). |
+| `SQLiteDeduplicationStore` | class | Durable SQLite-backed dedup store (state persists across restarts). |
 
 ### `IndexReport`
 
@@ -35,6 +38,8 @@ class Indexer:
         embedder:     Any,           # satisfies Embedder protocol
         vector_store: Any,           # satisfies VectorStore protocol
         chunker:      Any = None,    # Callable[[str], list[str]]; default: identity
+        *,
+        dedup_store:  DeduplicationStore | None = None,
     ) -> None: ...
 
     def index(
@@ -52,10 +57,16 @@ class Indexer:
 
     @property
     def seen_count(self) -> int: ...    # unique chunk-content hashes accumulated
-    def reset_dedup(self) -> None: ...  # clear hash set
+    def reset_dedup(self) -> None: ...  # clear the dedup store
 ```
 
 The default `chunker` is `lambda text: [text]` — the entire document text becomes one chunk. The `metadata` dict passed to `index` is merged into every chunk's stored metadata alongside the automatically added `"doc_id"` and `"chunk_index"` keys.
+
+`dedup_store` is keyword-only. When `None` (the default), an `InMemoryDeduplicationStore` is created internally — identical behaviour to before this parameter existed.
+
+### `DeduplicationStore`, `InMemoryDeduplicationStore`, `SQLiteDeduplicationStore`
+
+See [`data/ingestion` — Public API](../data/ingestion.md#public-api) for full API descriptions. The same three classes are re-exported from `rag/indexing` for caller convenience.
 
 ---
 
@@ -87,7 +98,7 @@ The default `chunker` is `lambda text: [text]` — the entire document text beco
 ### Data flow
 
 1. `index(doc_id, text, metadata)` calls `chunker(text)` to get a list of chunk strings.
-2. Each chunk is hashed with MD5. Chunks whose hash is already in `_seen_hashes` are counted as `chunks_skipped` and excluded.
+2. Each chunk is hashed with MD5. Chunks whose hash is already in `dedup_store` are counted as `chunks_skipped` and excluded.
 3. The remaining new chunks are embedded in a single `embedder.embed(texts)` call (minimising round-trips to GPU or API).
 4. For each `(idx, chunk)` and its corresponding vector:
    - A stable chunk ID `"<doc_id>#<idx>"` is computed.
@@ -100,7 +111,7 @@ The default `chunker` is `lambda text: [text]` — the entire document text beco
 
 **Deterministic chunk IDs** (`"<doc_id>#<chunk_index>"`) ensure that re-indexing the same document produces the same IDs, so the vector store performs an idempotent upsert rather than creating duplicate entries. This is critical for correctness when content is updated: the old vector is simply replaced in-place.
 
-**Content-hash deduplication** (`_seen_hashes`) operates at the chunk level, unlike `IngestionPipeline` which deduplicates at the document level. A chunk is skipped only if its exact text has been seen before. This means partial document updates — where only some chunks change — still re-embed the changed chunks while skipping unchanged ones.
+**Content-hash deduplication** (`dedup_store`) operates at the chunk level, unlike `IngestionPipeline` which deduplicates at the document level. A chunk is skipped only if its exact text has been seen before. This means partial document updates — where only some chunks change — still re-embed the changed chunks while skipping unchanged ones.
 
 **Single-batch embed call** per `index` invocation is a deliberate performance optimisation. Collecting all new chunks for a document before calling the embedder reduces the number of model forward passes and, for provider APIs, reduces the number of HTTP round-trips.
 
@@ -116,8 +127,8 @@ The default `chunker` is `lambda text: [text]` — the entire document text beco
   **Why**: Minimises embedder overhead (GPU kernel launches, API request count). Most documents have fewer chunks than the `BatchEmbedder` batch size, so this is effectively free batching.
   **Tradeoff**: If a single document has thousands of chunks (a very large document), the single batch call may exceed the embedder's per-request size limit. The caller must either pre-configure `BatchEmbedder` or split very large documents before calling `index`.
 
-- **Decision**: Content hash deduplication is per-chunk (not per-document as in `IngestionPipeline`).
-  **Why**: Enables partial re-indexing: only changed chunks of an updated document are re-embedded, while unchanged chunks are skipped. This is more efficient than re-indexing the entire document on any change.
+- **Decision**: Content hash deduplication is per-chunk (not per-document as in `IngestionPipeline`), managed by a pluggable `DeduplicationStore`.
+  **Why**: Enables partial re-indexing: only changed chunks of an updated document are re-embedded, while unchanged chunks are skipped. The pluggable store allows callers to choose between in-memory (fast, session-scoped) and SQLite-backed (durable, survives restarts).
   **Tradeoff**: Two different documents could produce identical chunks (e.g. a boilerplate header). The second occurrence would be skipped by the dedup check even though it should produce an entry under a different chunk ID. This is a correctness edge case worth addressing.
 
 - **Decision**: `metadata` is merged with auto-generated `"doc_id"` and `"chunk_index"` keys and stored alongside each vector.
@@ -133,7 +144,7 @@ The default `chunker` is `lambda text: [text]` — the entire document text beco
 ## Scaling concerns
 
 - **Batch indexing throughput**: `index_batch` calls `index` sequentially. For large document sets, parallel indexing with a concurrency limit (e.g. using `asyncio.gather` with a semaphore) would substantially increase throughput.
-- **Memory**: `_seen_hashes` grows with every unique chunk indexed. At one million unique chunks (32-byte hex strings each), this is approximately 32 MB. For very long-running processes, `reset_dedup()` or instance rotation is needed.
+- **Memory** (in-memory store): `InMemoryDeduplicationStore` grows with every unique chunk indexed. At one million unique chunks (32-byte hex strings each), this is approximately 32 MB. For very long-running processes, `reset_dedup()` or instance rotation is needed. `SQLiteDeduplicationStore` offloads this to disk at the cost of one SQLite I/O per `add()` call.
 - **Vector store write throughput**: Each chunk triggers one `vector_store.upsert` call. For `InMemoryVectorStore`, this is fast. For remote stores (pgvector, Weaviate), each call involves a network round-trip. A `upsert_batch` method on the vector store would dramatically reduce write latency.
 - **Chunker quality**: The default identity chunker produces one vector per document, which is appropriate only for short texts. For longer texts, retrieval precision degrades because a single large chunk is less topically focused than smaller ones. A fixed-size or sentence-boundary chunker is required for production.
 
@@ -187,6 +198,26 @@ docs = [
 ]
 report = indexer.index_batch(docs)
 print(report.docs_indexed, report.chunks_added)  # 2 3
+```
+
+**Durable deduplication across restarts:**
+
+```python
+from llm_agents.rag.embeddings import FakeEmbedder
+from llm_agents.rag.vector_store import InMemoryVectorStore
+from llm_agents.rag.indexing import Indexer, SQLiteDeduplicationStore
+
+# Run 1 — chunk is new; it gets embedded and upserted
+store1 = SQLiteDeduplicationStore("index_dedup.db")
+indexer1 = Indexer(FakeEmbedder(4), InMemoryVectorStore(), dedup_store=store1)
+report1 = indexer1.index("doc-1", "Unique content")
+print(report1.chunks_added, report1.chunks_skipped)  # 1 0
+
+# Run 2 (simulating a process restart) — same DB file, same chunk is skipped
+store2 = SQLiteDeduplicationStore("index_dedup.db")
+indexer2 = Indexer(FakeEmbedder(4), InMemoryVectorStore(), dedup_store=store2)
+report2 = indexer2.index("doc-1", "Unique content")
+print(report2.chunks_added, report2.chunks_skipped)  # 0 1
 ```
 
 **Idempotent re-indexing:**

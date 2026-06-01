@@ -4,6 +4,14 @@ The indexer assigns stable, deterministic chunk IDs derived from the parent
 ``doc_id`` and the chunk's position, so that re-indexing the same document is
 idempotent (the vector store simply overwrites existing entries with the same
 IDs).
+
+Chunk-content deduplication is managed by a
+:class:`~llm_agents.infra.cost_latency_optimization.DeduplicationStore`.
+The default store is
+:class:`~llm_agents.infra.cost_latency_optimization.InMemoryDeduplicationStore`
+(in-process; lost on restart).  Pass a
+:class:`~llm_agents.infra.cost_latency_optimization.SQLiteDeduplicationStore` to persist
+hashes across process restarts.
 """
 
 from __future__ import annotations
@@ -11,6 +19,11 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass, field
 from typing import Any
+
+from llm_agents.infra.cost_latency_optimization._dedup import (
+    DeduplicationStore,
+    InMemoryDeduplicationStore,
+)
 
 
 def _chunk_id(doc_id: str, index: int) -> str:
@@ -67,6 +80,11 @@ class Indexer:
         chunker:      Callable ``(text: str) -> list[str]``.  Takes the
                       document text and returns a list of chunk strings.
                       Defaults to a single-chunk (identity) chunker.
+        dedup_store:  Optional ``DeduplicationStore`` for tracking seen
+                      chunk-content hashes.  Defaults to
+                      ``InMemoryDeduplicationStore`` (state lost on restart).
+                      Pass ``SQLiteDeduplicationStore`` to persist hashes
+                      across process restarts.
     """
 
     def __init__(
@@ -74,11 +92,15 @@ class Indexer:
         embedder: Any,
         vector_store: Any,
         chunker: Any = None,
+        *,
+        dedup_store: DeduplicationStore | None = None,
     ) -> None:
         self._embedder = embedder
         self._vector_store = vector_store
         self._chunker = chunker or (lambda text: [text])
-        self._seen_hashes: set[str] = set()
+        self._dedup_store: DeduplicationStore = (
+            dedup_store if dedup_store is not None else InMemoryDeduplicationStore()
+        )
 
     def index(
         self,
@@ -107,7 +129,7 @@ class Indexer:
         new_chunks: list[tuple[int, str]] = []
         for idx, chunk in enumerate(chunks):
             h = _content_hash(chunk)
-            if h in self._seen_hashes:
+            if h in self._dedup_store:
                 report.chunks_skipped += 1
             else:
                 new_chunks.append((idx, chunk))
@@ -127,7 +149,7 @@ class Indexer:
             chunk_id = _chunk_id(doc_id, idx)
             chunk_meta = {**meta, "doc_id": doc_id, "chunk_index": idx}
             self._vector_store.upsert(chunk_id, vector, metadata=chunk_meta)
-            self._seen_hashes.add(_content_hash(chunk))
+            self._dedup_store.add(_content_hash(chunk))
             report.chunks_added += 1
 
         return report
@@ -158,8 +180,8 @@ class Indexer:
     @property
     def seen_count(self) -> int:
         """Number of unique chunk-content hashes accumulated."""
-        return len(self._seen_hashes)
+        return len(self._dedup_store)
 
     def reset_dedup(self) -> None:
-        """Clear the deduplication hash set."""
-        self._seen_hashes.clear()
+        """Clear the deduplication store."""
+        self._dedup_store.reset()

@@ -12,6 +12,9 @@ The ingestion module orchestrates the complete document intake pipeline: it fetc
 |---|---|---|
 | `IngestionPipeline` | class | Orchestrates fetch -> parse -> chunk -> dedup -> upsert. |
 | `IngestionReport` | dataclass | Per-run statistics: fetched, parsed, skipped, upserted, errors. |
+| `DeduplicationStore` | Protocol | Interface for pluggable content-hash deduplication backends. |
+| `InMemoryDeduplicationStore` | class | Default in-memory dedup store (state lost on restart). |
+| `SQLiteDeduplicationStore` | class | Durable SQLite-backed dedup store (state persists across restarts). |
 
 ### `IngestionReport`
 
@@ -33,22 +36,56 @@ Each field counts events for a single `ingest()` call. `errors` holds human-read
 class IngestionPipeline:
     def __init__(
         self,
-        connector: Any,   # satisfies Connector protocol
-        parser:    Any,   # satisfies DocumentParser protocol
-        chunker:   Callable[[ParsedDocument], list[Any]],
-        upsert:    Callable[[Any], None],
+        connector:   Any,   # satisfies Connector protocol
+        parser:      Any,   # satisfies DocumentParser protocol
+        chunker:     Callable[[ParsedDocument], list[Any]],
+        upsert:      Callable[[Any], None],
+        *,
+        dedup_store: DeduplicationStore | None = None,
     ) -> None: ...
 
     async def ingest(self, since_cursor: Any = None) -> IngestionReport: ...
 
     @property
     def seen_count(self) -> int: ...   # unique content hashes accumulated
-    def reset_dedup(self) -> None: ... # clear hash set for a fresh run
+    def reset_dedup(self) -> None: ... # clear the dedup store for a fresh run
 ```
 
 `connector`, `parser`, `chunker`, and `upsert` are stored by reference and not validated at construction time; mismatches surface on the first `ingest` call.
 
-Key internal attribute: `_seen_hashes: set[str]` — persists across `ingest` calls on the same instance.
+`dedup_store` is keyword-only. When `None` (the default), an `InMemoryDeduplicationStore` is created internally — identical behaviour to before this parameter existed.
+
+### `DeduplicationStore`
+
+```python
+class DeduplicationStore(Protocol):
+    def add(self, hash: str) -> None: ...
+    def __contains__(self, hash: str) -> bool: ...
+    def reset(self) -> None: ...
+    def __len__(self) -> int: ...
+```
+
+`runtime_checkable` — `isinstance(obj, DeduplicationStore)` works at runtime for any object that implements all four methods.
+
+### `InMemoryDeduplicationStore`
+
+```python
+class InMemoryDeduplicationStore:
+    def __init__(self) -> None: ...
+```
+
+Backed by a `set[str]`. State is lost when the process exits. This is the default used by `IngestionPipeline` when no `dedup_store` is provided.
+
+### `SQLiteDeduplicationStore`
+
+```python
+class SQLiteDeduplicationStore:
+    def __init__(self, path: str | Path) -> None: ...
+```
+
+Backed by a SQLite database file (stdlib `sqlite3`). Hashes are committed to disk on every `add()` call and survive process restarts. Pass `":memory:"` for an in-memory SQLite database (useful in tests).
+
+Raises `sqlite3.OperationalError` if the directory containing `path` does not exist.
 
 ---
 
@@ -64,7 +101,7 @@ Connector.fetch(since_cursor)
   |  for each    |
   |  Document    |
   |              |
-  |  MD5(content)|-----> _seen_hashes ---> skip (report.skipped += 1)
+  |  MD5(content)|-----> dedup_store ---> skip (report.skipped += 1)
   |              |
   |  parser.parse|-----> ParsedDocument
   |              |
@@ -82,9 +119,9 @@ Connector.fetch(since_cursor)
 
 1. `ingest(since_cursor)` opens an async iteration over `connector.fetch(since_cursor)`.
 2. For each `Document`:
-   a. Compute `MD5(doc.content)`. If the hash is in `_seen_hashes`, increment `report.skipped` and continue to the next document.
+   a. Compute `MD5(doc.content)`. If the hash is in `dedup_store`, increment `report.skipped` and continue to the next document.
    b. Call `parser.parse(doc.content, metadata=doc.metadata, doc_id=doc.doc_id)`. If the parser raises, append to `report.errors` and continue.
-   c. Increment `report.parsed` and add the hash to `_seen_hashes`.
+   c. Increment `report.parsed` and call `dedup_store.add(hash)`.
    d. Call `chunker(parsed)` to get a list of chunk objects.
    e. For each chunk, call `upsert(chunk)` and increment `report.upserted`.
 3. Return the completed `IngestionReport`.
@@ -101,9 +138,9 @@ Connector.fetch(since_cursor)
 
 ## Design decisions and tradeoffs
 
-- **Decision**: Deduplication is MD5 over raw content, stored in a process-local `set[str]`.
-  **Why**: MD5 is fast and adequate for non-security hashing. A process-local set avoids external state (Redis, database) during development and testing.
-  **Tradeoff**: The hash set is lost on process restart. For truly durable incremental ingestion, the set must be persisted externally between runs (not currently implemented).
+- **Decision**: Deduplication is MD5 over raw content, managed by a pluggable `DeduplicationStore`.
+  **Why**: MD5 is fast and adequate for non-security hashing. The pluggable store allows callers to choose between in-memory (fast, lost on restart) and SQLite-backed (durable, survives restarts) without changing any other pipeline code.
+  **Tradeoff**: The in-memory default (`InMemoryDeduplicationStore`) still loses state on process restart. Callers who need durable incremental ingestion must explicitly pass a `SQLiteDeduplicationStore`.
 
 - **Decision**: Parse errors are accumulated in `report.errors` rather than raising.
   **Why**: A single malformed document should not abort an entire ingestion run that may process thousands of documents.
@@ -117,15 +154,15 @@ Connector.fetch(since_cursor)
   **Why**: Keeps the pipeline easy to compose; the caller can make `upsert` delegate to `Indexer.index` or any other sink.
   **Tradeoff**: If the upsert operation is I/O-bound (network call to a remote vector DB), it blocks the event loop. An async `upsert` callable would be needed for high-throughput scenarios.
 
-- **Decision**: `_seen_hashes` persists across multiple `ingest` calls on the same instance.
-  **Why**: Enables true incremental ingestion — documents seen in earlier runs of the same process session are not re-processed.
-  **Tradeoff**: The set grows unbounded over the lifetime of the instance. For very long-running processes ingesting millions of documents, memory growth must be managed by calling `reset_dedup()` or rotating the instance.
+- **Decision**: The dedup store persists across multiple `ingest` calls on the same instance.
+  **Why**: Enables true incremental ingestion — documents seen in earlier runs of the same process session (and across restarts, with `SQLiteDeduplicationStore`) are not re-processed.
+  **Tradeoff**: The in-memory store grows unbounded over the lifetime of the instance. For very long-running processes ingesting millions of documents, memory growth must be managed by calling `reset_dedup()` or rotating the instance.
 
 ---
 
 ## Scaling concerns
 
-- **Memory**: `_seen_hashes` stores 32-character hex MD5 strings (~32 bytes each). One million unique documents cost approximately 32 MB. At tens of millions, this becomes significant.
+- **Memory** (in-memory store): `InMemoryDeduplicationStore` stores 32-character hex MD5 strings (~32 bytes each). One million unique documents cost approximately 32 MB. At tens of millions, this becomes significant. `SQLiteDeduplicationStore` offloads this to disk at the cost of one SQLite I/O per `add()` call.
 - **Throughput bottleneck**: The `upsert` callable is synchronous. If it performs a remote network call (e.g. to a vector database), the async event loop is blocked per chunk. Wrapping the upsert in `asyncio.get_event_loop().run_in_executor` is the mitigation.
 - **Connector speed vs. parser speed**: The pipeline processes documents one at a time. If parsing is slow (e.g. PDF extraction) and the connector is fast, documents pile up. A bounded queue with a worker pool would be needed for parallelism.
 - **Error rate monitoring**: There is no built-in alerting if the error rate exceeds a threshold. Production use requires external monitoring of `IngestionReport.errors`.
@@ -134,7 +171,7 @@ Connector.fetch(since_cursor)
 
 ## Future improvements
 
-- **Durable cursor and hash persistence**: Persist `_seen_hashes` and the last `since_cursor` to a database or file between process restarts, making truly resumable ingestion possible.
+- **Durable cursor persistence**: Persist the last `since_cursor` alongside the dedup store between process restarts, making fully resumable incremental ingestion possible without re-fetching from the beginning.
 - **Async upsert support**: Accept `Callable[[Any], Awaitable[None]]` in addition to synchronous callables, so high-throughput upserts can be awaited without blocking the loop.
 - **Parallel document processing**: Process multiple documents concurrently using `asyncio.gather` with a configurable concurrency limit (semaphore), improving throughput when parsing is the bottleneck.
 - **Metrics integration**: Expose `IngestionReport` fields as counter/gauge metrics (Prometheus, StatsD) so operations teams can monitor pipeline health without parsing log output.
@@ -197,6 +234,43 @@ report1 = asyncio.run(pipeline.ingest(since_cursor=None))
 # Second run — nothing new (all hashes already seen)
 report2 = asyncio.run(pipeline.ingest(since_cursor=None))
 print(report2.skipped)  # 10 — all documents deduplicated
+```
+
+**Durable deduplication across restarts:**
+
+```python
+import asyncio
+from llm_agents.data.connectors import Document, FakeConnector
+from llm_agents.data.parsers import TextParser
+from llm_agents.data.ingestion import IngestionPipeline, SQLiteDeduplicationStore
+
+docs = [Document(doc_id="1", content="Important document")]
+connector = FakeConnector(name="src", documents=docs)
+chunks: list[str] = []
+
+# Run 1 — document is new; it gets upserted
+store = SQLiteDeduplicationStore("dedup.db")
+pipeline = IngestionPipeline(
+    connector=connector,
+    parser=TextParser(),
+    chunker=lambda pd: [pd.text],
+    upsert=chunks.append,
+    dedup_store=store,
+)
+report1 = asyncio.run(pipeline.ingest())
+print(report1.upserted)  # 1
+
+# Run 2 (simulating a process restart) — same DB file, same document is skipped
+store2 = SQLiteDeduplicationStore("dedup.db")
+pipeline2 = IngestionPipeline(
+    connector=FakeConnector(name="src", documents=docs),
+    parser=TextParser(),
+    chunker=lambda pd: [pd.text],
+    upsert=chunks.append,
+    dedup_store=store2,
+)
+report2 = asyncio.run(pipeline2.ingest())
+print(report2.skipped)  # 1 — already seen in prior run
 ```
 
 **Inspecting errors:**

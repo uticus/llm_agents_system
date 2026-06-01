@@ -1,4 +1,4 @@
-"""Cost/latency optimization subsystem: caching, batching, and budget tracking.
+"""Cost/latency optimization subsystem: caching, batching, budget tracking, and dedup.
 
 Public surface
 --------------
@@ -23,15 +23,41 @@ Request batcher::
 
     batcher = Batcher(router)
     results = await batcher.batch_complete([req1, req2, req3])
+
+Deduplication store::
+
+    from llm_agents.infra.cost_latency_optimization import (
+        DeduplicationStore,
+        InMemoryDeduplicationStore,
+        SQLiteDeduplicationStore,
+    )
+
+    # In-memory (default — lost on restart):
+    store = InMemoryDeduplicationStore()
+
+    # Durable (survives restarts):
+    store = SQLiteDeduplicationStore("dedup.db")
+
+    store.add("abc123")
+    "abc123" in store  # True
+    store.reset()
 """
 
 from llm_agents.infra.cost_latency_optimization._batcher import Batcher
 from llm_agents.infra.cost_latency_optimization._budget import BudgetReport, BudgetTracker
 from llm_agents.infra.cost_latency_optimization._cache import CompletionCache
+from llm_agents.infra.cost_latency_optimization._dedup import (
+    DeduplicationStore,
+    InMemoryDeduplicationStore,
+    SQLiteDeduplicationStore,
+)
 
 __all__ = [
     "Batcher",
     "BudgetReport",
     "BudgetTracker",
     "CompletionCache",
+    "DeduplicationStore",
+    "InMemoryDeduplicationStore",
+    "SQLiteDeduplicationStore",
 ]

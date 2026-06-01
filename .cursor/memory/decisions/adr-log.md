@@ -150,6 +150,57 @@ with a custom `JSONFormatter`. Each log call adds `trace_id` and `span_id` from
 
 ---
 
+## ADR-005: Shared DeduplicationStore protocol in infra/cost_latency_optimization
+Date: 2026-06-01
+Status: accepted
+Task: task-044
+
+### Context
+Both `data/ingestion.IngestionPipeline` and `rag/indexing.Indexer` maintain content-hash
+deduplication via an in-process `set[str]` (`_seen_hashes`). This state is lost on process
+restart, so unchanged documents are re-embedded and re-upserted on every cold start.
+The project needed a durable backend option. Because both modules need the same abstraction,
+a shared location was required to avoid duplication.
+
+### Decision
+Define a `DeduplicationStore` Protocol (plus `InMemoryDeduplicationStore` and
+`SQLiteDeduplicationStore` concrete implementations) in
+`infra/cost_latency_optimization/_dedup.py` and re-export from that package's `__init__`.
+Both `data/ingestion` and `rag/indexing` import from `infra/cost_latency_optimization`
+and re-export the three names from their own `__init__` for caller convenience.
+Each consumer receives an optional keyword-only `dedup_store` parameter; `None` (default)
+creates an `InMemoryDeduplicationStore` internally, preserving full backward compatibility.
+
+### Alternatives considered
+- Duplicate definition in each subpackage (`data/ingestion/_dedup.py` and
+  `rag/indexing/_dedup.py`): rejected — two identical Protocol definitions violate DRY
+  and create maintenance risk (divergence over time).
+- New top-level `shared/` package: rejected — introduces a new layer not present in the
+  existing architecture; both consumers already depend on `infra/`, making
+  `infra/cost_latency_optimization` the natural home.
+- Place in `data/` and import into `rag/`: rejected — creates a downward cross-subsystem
+  dependency from `rag/` into `data/`, violating the intended layer boundaries where
+  `data/` feeds `rag/`, not the other way around.
+
+### Consequences
+- Positive: single Protocol definition shared by both consumers; `SQLiteDeduplicationStore`
+  enables durable incremental ingestion and indexing across process restarts; pluggable
+  backend allows future Redis or DynamoDB implementations without touching consumers.
+- Negative: callers who need durable deduplication must explicitly pass
+  `SQLiteDeduplicationStore`; the default remains in-memory (by design, for backward compat).
+
+### Constraints imposed
+- `DeduplicationStore`, `InMemoryDeduplicationStore`, `SQLiteDeduplicationStore` live
+  exclusively in `infra/cost_latency_optimization/_dedup.py`.
+- No duplicate Protocol definition in `data/` or `rag/`; both import from `infra/`.
+- `dedup_store` parameter MUST be keyword-only (`*` separator) in both consumers.
+- `SQLiteDeduplicationStore` uses deferred `import sqlite3` inside `__init__` (project
+  pattern for optional-path stdlib modules with potential absence in lightweight envs).
+- Hash algorithm for all consumers remains MD5 via
+  `hashlib.md5(text.encode(), usedforsecurity=False).hexdigest()`.
+
+---
+
 <!-- ADRs will be appended here by Memory writer. Format:
 
 ## ADR-001: <title>

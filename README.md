@@ -405,7 +405,7 @@ llm_agents_system/
                                   BUILTIN_SUITES, BUILTIN_AGENTS
       hallucination/              HallucinationReport, HallucinationDetector (Protocol), OverlapDetector, LLMJudgeDetector
     config.py                     typed runtime settings (env + configs/)
-  tests/unit/                     mirrors src/ — one test file per module (1300 passing with --extra dev --extra rag --extra serving)
+  tests/unit/                     mirrors src/ — one test file per module (1342 passing with --extra dev --extra rag --extra serving)
   docs/                           per-module documentation
     index.md                      system overview, layer diagram, all flow diagrams
     infra/                        6 module docs
@@ -519,7 +519,7 @@ All 30 modules are implemented and tested.  Five external vector-store adapters,
 embedder adapters, three model-hub backends, MLflow version tracking, the NeMo Guardrails
 adapter, the PEFT/QLoRA trainer factory, the MLflow/DVC/Delta Lake data-versioning
 integration, and the five concrete benchmark task suites add a further 641 tests on top
-of the 30-module baseline.  The test suite has **1300 tests passing** with
+of the 30-module baseline.  The test suite has **1342 tests passing** with
 `uv sync --extra dev --extra rag --extra serving` (0 skipped).
 
 | Layer | Modules | Status |
@@ -598,10 +598,13 @@ HotpotQA multi-hop; cost — mean USD per completed task; cache hit — fraction
 
 ## Future improvements
 
-- Per-tenant budget enforcement.
-- `async` inference client for concurrent step execution in `hierarchical_agents`.
-- Durable deduplication store for `IngestionPipeline` and `Indexer` (currently in-process
-  `set[str]` — lost on restart).
+- **Per-tenant budget enforcement.** The current `BudgetTracker`
+  (`infra/cost_latency_optimization`) accumulates cost and token usage globally across all
+  callers. The improvement is to add per-tenant tracking: each tenant is identified by a
+  string ID supplied by the caller; each tenant has its own USD cost limit registered at
+  construction or via a `register` call; calls that would exceed the limit are blocked
+  (raise an exception) before the router is ever invoked, with an optional soft-warning
+  threshold (e.g. 80 %) that fires before the hard block.
 
 ---
 
@@ -613,7 +616,7 @@ Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/).
 # Install project + dev dependencies (light — no heavy ML/RAG deps)
 uv sync --extra dev --extra rag --extra serving
 
-# Run the full test suite (1300 passing)
+# Run the full test suite (1342 passing)
 uv run pytest
 
 # Run with short tracebacks and quiet output
