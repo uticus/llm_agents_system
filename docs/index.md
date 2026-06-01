@@ -81,7 +81,7 @@ rag/embeddings  (Embedder.embed)
     |
     | 4. vector search
     v
-rag/vector_store  (VectorStore.search — InMemoryVectorStore / FAISSVectorStore / PgVectorStore / WeaviateVectorStore)
+rag/vector_store  (VectorStore.search — InMemoryVectorStore / FAISSVectorStore / PgVectorStore / WeaviateVectorStore / ChromaVectorStore)
     |
     | 5. optional rerank
     v
@@ -186,7 +186,7 @@ FineTuneResult(model_path, metrics, run_id, artifact_uri)
 | Module | Description | Doc |
 |---|---|---|
 | embeddings | `Embedder` Protocol, `FakeEmbedder`, `BatchEmbedder` | [rag/embeddings.md](rag/embeddings.md) |
-| vector_store | `VectorStore` Protocol, `InMemoryVectorStore` (cosine similarity), `FAISSVectorStore` (FAISS flat/cosine, `rag` extra), `PgVectorStore` (pgvector IVFFlat, `pgvector` extra), `WeaviateVectorStore` (Weaviate HNSW, `weaviate` extra), `SearchResult` | [rag/vector_store.md](rag/vector_store.md) |
+| vector_store | `VectorStore` Protocol, `InMemoryVectorStore` (cosine similarity), `FAISSVectorStore` (FAISS flat/cosine, `rag` extra), `PgVectorStore` (pgvector IVFFlat, `pgvector` extra), `WeaviateVectorStore` (Weaviate HNSW, `weaviate` extra), `ChromaVectorStore` (Chroma HNSW, `chroma` extra), `SearchResult` | [rag/vector_store.md](rag/vector_store.md) |
 | indexing | `Indexer` (chunk → MD5 dedup → batch embed → upsert), `IndexReport` | [rag/indexing.md](rag/indexing.md) |
 | retrieval | `DenseRetriever` (embed → search → filter), `RetrievedPassage` | [rag/retrieval.md](rag/retrieval.md) |
 | reranking | `Reranker` Protocol, `FakeReranker`, `ScoreReranker` | [rag/reranking.md](rag/reranking.md) |
@@ -295,6 +295,12 @@ import weaviate
 from llm_agents.rag.vector_store import WeaviateVectorStore
 client = weaviate.connect_to_local()
 store = WeaviateVectorStore(client, collection_name="RagDocs")
+
+# Chroma HNSW (uv sync --extra chroma; embedded or server mode)
+import chromadb
+from llm_agents.rag.vector_store import ChromaVectorStore
+chroma_client = chromadb.PersistentClient(path="/data/chroma")
+store = ChromaVectorStore(chroma_client, collection_name="rag_docs")
 ```
 
 ```python
@@ -349,7 +355,7 @@ src/llm_agents/
   rag/
     embeddings/          Embedder, FakeEmbedder, BatchEmbedder
     vector_store/        VectorStore, InMemoryVectorStore, FAISSVectorStore,
-                         PgVectorStore, WeaviateVectorStore, SearchResult
+                         PgVectorStore, WeaviateVectorStore, ChromaVectorStore, SearchResult
     indexing/            Indexer, IndexReport
     retrieval/           DenseRetriever, RetrievedPassage
     reranking/           Reranker, FakeReranker, ScoreReranker

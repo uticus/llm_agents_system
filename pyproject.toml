@@ -49,6 +49,10 @@ pgvector = [
 weaviate = [
     "weaviate-client>=4.6",
 ]
+# Chroma vector-store adapter (requires a running or embedded Chroma instance).
+chroma = [
+    "chromadb>=0.5",
+]
 # Data connectors and document parsers for ingestion.
 data = [
     "psycopg[binary]>=3.2",

@@ -2,7 +2,7 @@
 
 ## Overview
 
-The vector store module provides persistent (or in-process) storage for embedding vectors and associated metadata, along with similarity search over those vectors. It is the core index that makes retrieval-augmented generation possible: at indexing time, chunk embeddings are written into the store; at retrieval time, a query embedding is used to find the nearest stored vectors. The module defines the `VectorStore` structural protocol, a `SearchResult` dataclass for query results, and three implementations: `InMemoryVectorStore` (brute-force in-memory, for tests and prototyping), `FAISSVectorStore` (FAISS flat inner-product index with lazy index rebuild, requires the `rag` extra), and `PgVectorStore` (PostgreSQL pgvector extension, persistent and durable, requires the `pgvector` extra). Production deployments swap in `FAISSVectorStore`, `PgVectorStore`, or other adapters behind the same protocol.
+The vector store module provides persistent (or in-process) storage for embedding vectors and associated metadata, along with similarity search over those vectors. It is the core index that makes retrieval-augmented generation possible: at indexing time, chunk embeddings are written into the store; at retrieval time, a query embedding is used to find the nearest stored vectors. The module defines the `VectorStore` structural protocol, a `SearchResult` dataclass for query results, and five implementations: `InMemoryVectorStore` (brute-force in-memory, for tests and prototyping), `FAISSVectorStore` (FAISS flat inner-product index with lazy index rebuild, requires the `rag` extra), `PgVectorStore` (PostgreSQL pgvector extension, persistent and durable, requires the `pgvector` extra), `WeaviateVectorStore` (Weaviate HNSW, requires the `weaviate` extra), and `ChromaVectorStore` (Chroma HNSW with cosine similarity, requires the `chroma` extra). Production deployments swap in any backend behind the same protocol.
 
 ---
 
@@ -16,6 +16,7 @@ The vector store module provides persistent (or in-process) storage for embeddin
 | `FAISSVectorStore` | class | FAISS flat inner-product index with L2-normalised cosine search; requires `rag` extra. |
 | `PgVectorStore` | class | PostgreSQL pgvector-backed store with IVFFlat approximate search; requires `pgvector` extra. |
 | `WeaviateVectorStore` | class | Weaviate HNSW-backed store with cosine similarity; requires `weaviate` extra. |
+| `ChromaVectorStore` | class | Chroma HNSW-backed store with cosine similarity; requires `chroma` extra. |
 
 ### `SearchResult`
 
@@ -129,6 +130,29 @@ class WeaviateVectorStore:
 
 The caller provides an open `weaviate.WeaviateClient`; the store does not manage the client lifecycle. Collection, HNSW index (cosine distance), and property schema creation happen lazily on the first `upsert` (or an explicit `ensure_collection()` call). Each document is stored as a Weaviate object with a deterministic UUID-5 derived from `doc_id` (no internal ID mapping dict needed). Metadata is stored as a JSON string in a `metadata_json` text property. `import weaviate.classes.config` and `import weaviate.classes.query` are deferred to their first call site. Collection names must start with an uppercase letter (Weaviate convention) and are validated at construction time.
 
+### `ChromaVectorStore`
+
+Requires: `pip install llm-agents-system[chroma]` (`chromadb>=0.5`).
+
+```python
+class ChromaVectorStore:
+    def __init__(
+        self,
+        client: Any,               # open Chroma client (chromadb.Client or PersistentClient)
+        collection_name: str = "llm_vectors",
+        dimensions: int | None = None,
+    ) -> None: ...
+    def upsert(self, doc_id: str, vector: list[float], metadata: dict[str, Any] | None = None) -> None: ...
+    def search(self, query_vector: list[float], top_k: int = 5) -> list[SearchResult]: ...
+    def delete(self, doc_id: str) -> bool: ...
+    def ensure_collection(self) -> None: ...  # explicit init for pre-existing collections
+
+    def __len__(self) -> int: ...
+    def __contains__(self, doc_id: str) -> bool: ...
+```
+
+The caller provides an open Chroma client; the store does not manage the client lifecycle. Collection creation with `hnsw:space=cosine` happens lazily on the first `upsert` (or an explicit `ensure_collection()` call). Chroma's native `collection.upsert()` provides atomic insert-or-replace semantics — no check-then-branch is needed. Score is returned as `1.0 - cosine_distance`. Unlike other adapters, `chromadb` is never imported inside `_chroma_store.py` — all operations go through the injected client object, so the module imports cleanly without the `chroma` extra installed. Collection names are validated at construction time (3–63 chars, alphanumeric start/end, letters/digits/underscores/dots/hyphens, no consecutive dots).
+
 ---
 
 ## Architecture
@@ -149,6 +173,8 @@ The caller provides an open `weaviate.WeaviateClient`; the store does not manage
   +-----------------+         +-----------------------+
                        <---   | WeaviateVectorStore   |  (managed HNSW, weaviate extra)
                               +-----------------------+
+                       <---   | ChromaVectorStore     |  (embedded/server HNSW, chroma extra)
+                              +-----------------------+
         ^
         | search(query_vector, top_k)
         |
@@ -165,7 +191,8 @@ The vector store sits at the centre of the RAG data plane. Writes come from the 
 3. `FAISSVectorStore` stores vector and metadata in `_data` dict and marks `_dirty = True`.
 4. `PgVectorStore` issues `INSERT ... ON CONFLICT DO UPDATE` to PostgreSQL.
 5. `WeaviateVectorStore` calls `fetch_object_by_id` to check existence, then `data.insert` (new) or `data.replace` (update existing).
-6. If the key already exists, the old entry is replaced (idempotent upsert) in all implementations.
+6. `ChromaVectorStore` calls `collection.upsert(ids=[...], embeddings=[...], metadatas=[...])` — native atomic insert-or-replace, no check-then-branch needed.
+7. If the key already exists, the old entry is replaced (idempotent upsert) in all implementations.
 
 **Read path (retrieval):**
 1. `DenseRetriever` calls `store.search(query_vector, top_k=k)`.
@@ -173,14 +200,16 @@ The vector store sits at the centre of the RAG data plane. Writes come from the 
 3. `FAISSVectorStore`: if `_dirty`, rebuilds `IndexFlatIP` from `_data`; L2-normalises query; calls `index.search`.
 4. `PgVectorStore`: executes `SELECT doc_id, 1.0 - (embedding <=> %s::vector) AS score FROM <table> ORDER BY dist LIMIT k` via the pgvector `<=>` cosine-distance operator.
 5. `WeaviateVectorStore`: calls `collection.query.near_vector(near_vector=..., limit=k, return_metadata=MetadataQuery(distance=True))`; score = `1.0 - obj.metadata.distance`.
-6. Results are returned as `list[SearchResult]` sorted by descending score.
+6. `ChromaVectorStore`: clamps `n_results = min(top_k, collection.count())`; calls `collection.query(query_embeddings=[...], n_results=n, include=["distances", "metadatas"])`; score = `1.0 - distance`.
+7. Results are returned as `list[SearchResult]` sorted by descending score.
 
 **Delete path:**
 1. Caller calls `store.delete(doc_id)`.
 2. `InMemoryVectorStore` / `FAISSVectorStore`: removes from internal dict; FAISS marks `_dirty = True` (index rebuilt on next search).
 3. `PgVectorStore`: issues `DELETE FROM <table> WHERE doc_id = %s`; reads `rowcount` to determine whether a row existed.
 4. `WeaviateVectorStore`: calls `fetch_object_by_id(uuid5(doc_id))`; if not None, calls `data.delete_by_id(uuid)`.
-5. Returns `True` if the entry existed and was removed, `False` otherwise.
+5. `ChromaVectorStore`: calls `collection.get(ids=[doc_id], include=[])` to check existence; if found, calls `collection.delete(ids=[doc_id])`.
+6. Returns `True` if the entry existed and was removed, `False` otherwise.
 
 ### Key abstractions
 
@@ -195,6 +224,8 @@ The vector store sits at the centre of the RAG data plane. Writes come from the 
 **`PgVectorStore`** uses the injection pattern: the caller passes an open `psycopg.Connection`. This makes the store testable without a running server (mock the connection). The `_ensure_table` method is called lazily on the first `upsert`, which creates the `vector` extension, the table, and an IVFFlat index in a single transaction. Table names are validated with a strict regex to prevent SQL injection — only parameterised queries are used for data values.
 
 **`WeaviateVectorStore`** uses the same injection pattern: the caller passes an open `weaviate.WeaviateClient`. Collection creation is lazy (first `upsert` or explicit `ensure_collection()`). Document identity in Weaviate requires a UUID; a deterministic UUID-5 is derived from `doc_id` using a fixed project namespace, eliminating the need for an internal ID-mapping dict. Metadata is stored as a JSON string in a `metadata_json` text property rather than as individual Weaviate properties, keeping the schema fixed and independent of metadata shape. Upsert is a check-then-branch: `fetch_object_by_id` determines whether to call `data.insert` or `data.replace`.
+
+**`ChromaVectorStore`** uses the same injection pattern: the caller passes an open Chroma client (`chromadb.Client` or `PersistentClient`). Collection creation with `hnsw:space=cosine` is lazy (first `upsert` or explicit `ensure_collection()`). Chroma's native `collection.upsert()` provides atomic insert-or-replace — no check-then-branch is required, unlike Weaviate. `chromadb` is never imported inside the adapter module; all calls go through the injected client, so the module loads cleanly without the `chroma` extra. Metadata is stored as a Chroma metadata dict (shallow-copied on write). Search clamps `n_results = min(top_k, collection.count())` to avoid Chroma raising when `n_results` exceeds stored items.
 
 ---
 
@@ -248,6 +279,18 @@ The vector store sits at the centre of the RAG data plane. Writes come from the 
   **Why**: Weaviate v4 has no single atomic upsert API. The check-then-branch is explicit and testable; try/except on insert would catch legitimate errors (network failure, schema mismatch) along with duplicate-UUID errors.
   **Tradeoff**: Two API calls per upsert instead of one. In high-throughput scenarios, a batch upsert API or a try/except approach on a narrowly typed exception may be preferred.
 
+- **Decision**: `ChromaVectorStore` uses Chroma's native `collection.upsert()` for atomic insert-or-replace.
+  **Why**: Unlike Weaviate, Chroma provides a single `upsert` call with insert-or-replace semantics. No check-then-branch is needed, reducing round-trips and eliminating the race condition inherent in check-then-write.
+  **Tradeoff**: No change — Chroma's upsert is both simpler and more correct than the alternatives.
+
+- **Decision**: `ChromaVectorStore` never imports `chromadb` inside the module — all operations go through the injected client.
+  **Why**: Unlike FAISS (deferred `import faiss`) and pgvector (deferred `import pgvector`), Chroma has no module-level constants or types that must be resolved at definition time. Injecting the client is sufficient. This means the module imports with zero overhead even without the `chroma` extra installed.
+  **Tradeoff**: The caller must construct the client externally, which is already required by the injection pattern. No additional burden compared to other adapters.
+
+- **Decision**: `ChromaVectorStore` clamps `n_results = min(top_k, collection.count())` on every search.
+  **Why**: Chroma raises `chromadb.errors.InvalidCollectionException` (or similar) if `n_results` exceeds the number of stored items. The clamp avoids this edge case and makes search idempotent on sparse collections.
+  **Tradeoff**: An extra `collection.count()` call per search adds one round-trip. This is acceptable; alternatives (catch-and-return-empty) would obscure the failure mode.
+
 ---
 
 ## Scaling concerns
@@ -264,6 +307,9 @@ The vector store sits at the centre of the RAG data plane. Writes come from the 
 - **WeaviateVectorStore — upsert race condition**: The check-then-branch `fetch_object_by_id → insert/replace` is not atomic. Concurrent upserts for the same `doc_id` can cause a `replace` call for an object that doesn't yet exist, or an `insert` for one that already does. Weaviate raises an error in this case. Mitigation: use an external lock per `doc_id` for concurrent producers, or adopt a retry loop.
 - **WeaviateVectorStore — client lifecycle**: The store does not call `client.close()`. The caller must close the client after all operations. Forgetting to close leaves an open gRPC connection to the Weaviate instance.
 - **WeaviateVectorStore — metadata filtering**: Metadata is stored as a JSON string and cannot be filtered at the Weaviate query layer. Pre-search filtering requires a separate query, or redesigning the schema to use individual properties.
+- **ChromaVectorStore — count() on every search**: `search` calls `collection.count()` before querying to clamp `n_results`. For very high-throughput search, this adds a round-trip per query. Mitigation: cache the count or raise the minimum at which Chroma starts refusing.
+- **ChromaVectorStore — client lifecycle**: The store does not call `client.reset()` or any teardown method. The caller is responsible for managing the Chroma client lifecycle (especially with `PersistentClient` which persists to disk).
+- **ChromaVectorStore — concurrency**: Chroma's embedded client is not thread-safe. For concurrent writes use Chroma server mode (`HttpClient`) and one `ChromaVectorStore` per thread, or wrap with an external lock.
 - **All implementations — concurrency**: None of the implementations serialise concurrent access. Wrap in a lock or use connection pools (pgvector) for concurrent production workloads.
 
 ---
@@ -274,7 +320,7 @@ The vector store sits at the centre of the RAG data plane. Writes come from the 
 - **Async PgVectorStore**: Add `AsyncPgVectorStore` using `psycopg` async API (`await conn.execute(...)`) for use in async serving paths without blocking the event loop.
 - **PgVectorStore metadata filtering**: Extend `search` with an optional `filters: dict[str, Any]` parameter that appends `WHERE metadata @> %s::jsonb` to the query for pre-search filtering. This would require a protocol extension or a subclass.
 - **PgVectorStore connection pool**: Accept a `psycopg_pool.ConnectionPool` in addition to a bare connection, and acquire/release connections per operation for concurrent workloads.
-- **Weaviate / Chroma adapters**: Add adapters for managed vector database services with native metadata filtering, multi-tenancy, authentication, and horizontal scaling.
+- **Elasticsearch adapter**: Add an adapter for Elasticsearch with the `dense_vector` field and `script_score` or `knn` query for approximate nearest-neighbour search.
 - **Bulk upsert**: Add an `upsert_batch(entries: list[tuple[str, list[float], dict]]) -> None` method to the protocol for efficient bulk loading. PostgreSQL COPY, FAISS `index.add(matrix)`, and Weaviate batch APIs all support bulk ingestion with far lower overhead than sequential upsert.
 - **FAISSVectorStore HNSW mode**: Add a `metric` parameter to `FAISSVectorStore` (default `"cosine"`, option `"l2"`) and switch to `IndexHNSWFlat` for approximate search when exact search latency is unacceptable at scale.
 - **WeaviateVectorStore metadata schema**: Add an optional `extra_properties` parameter to `WeaviateVectorStore` that defines additional Weaviate object properties for fields that need to be filterable at query time.
@@ -387,6 +433,33 @@ store.ensure_collection()  # connect to existing collection; no upsert needed
 results = store.search(query_embedding, top_k=10)
 ```
 
+**Chroma adapter (requires `chroma` extra):**
+
+```python
+import chromadb
+from llm_agents.rag.vector_store import ChromaVectorStore
+
+# Embedded persistent client
+client = chromadb.PersistentClient(path="/data/chroma")
+store = ChromaVectorStore(client, collection_name="rag_docs")
+
+# first upsert creates the collection with hnsw:space=cosine
+store.upsert("doc1", embedding_vector, {"source": "wiki"})
+store.upsert("doc1", new_embedding, {"source": "wiki_v2"})  # atomic replace
+
+results = store.search(query_embedding, top_k=5)
+for r in results:
+    print(r.doc_id, round(r.score, 3), r.metadata)
+```
+
+Query a pre-existing Chroma collection (without upserting first):
+
+```python
+store = ChromaVectorStore(client, collection_name="existing_docs")
+store.ensure_collection()  # connect to existing collection; no upsert needed
+results = store.search(query_embedding, top_k=10)
+```
+
 **Swapping backends transparently (protocol-driven):**
 
 ```python
@@ -396,6 +469,6 @@ def build_index(store: VectorStore, docs: list[tuple[str, list[float]]]) -> None
     for doc_id, vec in docs:
         store.upsert(doc_id, vec)
 
-# Works identically with InMemoryVectorStore, FAISSVectorStore, or PgVectorStore
+# Works identically with InMemoryVectorStore, FAISSVectorStore, PgVectorStore, or ChromaVectorStore
 build_index(InMemoryVectorStore(), [("a", [1.0, 0.0]), ("b", [0.0, 1.0])])
 ```

@@ -193,7 +193,7 @@ rag/embeddings  (Embedder.embed)
     |
     | 4. vector search
     v
-rag/vector_store  (VectorStore.search — InMemoryVectorStore / FAISSVectorStore / PgVectorStore / WeaviateVectorStore)
+rag/vector_store  (VectorStore.search — InMemoryVectorStore / FAISSVectorStore / PgVectorStore / WeaviateVectorStore / ChromaVectorStore)
     |
     | 5. optional rerank
     v
@@ -311,7 +311,7 @@ FineTuneResult(model_path, metrics, run_id, artifact_uri)
 | Subsystem | Package | Responsibility | Doc |
 |---|---|---|---|
 | Embeddings | `rag/embeddings/` | `Embedder` protocol; `FakeEmbedder`, `BatchEmbedder` | [embeddings](docs/rag/embeddings.md) |
-| Vector store | `rag/vector_store/` | Cosine-similarity search; `InMemoryVectorStore`, `FAISSVectorStore`, `PgVectorStore`, `WeaviateVectorStore` | [vector_store](docs/rag/vector_store.md) |
+| Vector store | `rag/vector_store/` | Cosine-similarity search; `InMemoryVectorStore`, `FAISSVectorStore`, `PgVectorStore`, `WeaviateVectorStore`, `ChromaVectorStore` | [vector_store](docs/rag/vector_store.md) |
 | Indexing | `rag/indexing/` | chunk → MD5 dedup → batch embed → upsert | [indexing](docs/rag/indexing.md) |
 | Retrieval | `rag/retrieval/` | Dense passage retrieval with metadata filtering | [retrieval](docs/rag/retrieval.md) |
 | Reranking | `rag/reranking/` | Score-based reranking; `FakeReranker`, `ScoreReranker` | [reranking](docs/rag/reranking.md) |
@@ -371,7 +371,7 @@ llm_agents_system/
     rag/
       embeddings/                 Embedder (Protocol), FakeEmbedder, BatchEmbedder
       vector_store/               VectorStore (Protocol), InMemoryVectorStore, FAISSVectorStore,
-                                  PgVectorStore, WeaviateVectorStore, SearchResult
+                                  PgVectorStore, WeaviateVectorStore, ChromaVectorStore, SearchResult
       indexing/                   Indexer, IndexReport
       retrieval/                  DenseRetriever, RetrievedPassage
       reranking/                  Reranker (Protocol), FakeReranker, ScoreReranker
@@ -487,7 +487,7 @@ store (a noted future improvement).
 - **I/O- and GPU-bound.** Hosted calls are network-bound; local inference is GPU-bound.
   Design for async/concurrent I/O on the hot path and a separate inference tier for local
   models.
-- **Vector index size.** Corpora grow; choose a vector store that scales (pgvector/Weaviate
+- **Vector index size.** Corpora grow; choose a vector store that scales (pgvector/Weaviate/Chroma
   for large, FAISS for local) and shard/replicate as needed.
 - **Token & context budgets.** `long_context` must chunk/summarize before overflow;
   retrieval must pack the most relevant context into the budget.
@@ -506,9 +506,9 @@ store (a noted future improvement).
 
 ## Implementation status
 
-All 30 modules are implemented and tested.  Three external vector-store adapters (FAISS,
-pgvector, Weaviate) add a further 141 tests on top of the 30-module baseline.
-The test suite has **749 tests passing** (1 skipped: faiss-cpu not installed in default
+All 30 modules are implemented and tested.  Four external vector-store adapters (FAISS,
+pgvector, Weaviate, Chroma) add a further 196 tests on top of the 30-module baseline.
+The test suite has **804 tests passing** (1 skipped: faiss-cpu not installed in default
 dev env; 1 pre-existing failure: pydantic not installed without the `serving` extra).
 
 | Layer | Modules | Status |
@@ -570,7 +570,7 @@ uv run python -m llm_agents.evaluation.benchmarking --suite <name>
 
 ## Future improvements
 
-- External vector-store adapters: Chroma, Elasticsearch. (FAISS, pgvector, and Weaviate are implemented.)
+- External vector-store adapters: Elasticsearch. (FAISS, pgvector, Weaviate, and Chroma are implemented.)
 - External embeddings adapters: sentence-transformers, OpenAI embeddings API.
 - Concrete model-hub adapters for HuggingFace and GGUF (llama.cpp / vLLM).
 - NeMo Guardrails adapter behind `guardrails`.
@@ -593,7 +593,7 @@ Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/).
 # Install project + dev dependencies (light — no heavy ML/RAG deps)
 uv sync --extra dev
 
-# Run the full test suite (749 passing)
+# Run the full test suite (804 passing)
 uv run pytest
 
 # Run with short tracebacks and quiet output
@@ -618,6 +618,7 @@ Install only what a given task needs:
 uv sync --extra rag               # embeddings + local FAISS vector index (faiss-cpu, sentence-transformers)
 uv sync --extra pgvector          # PostgreSQL pgvector adapter (psycopg + pgvector; needs running PG)
 uv sync --extra weaviate          # Weaviate HNSW adapter (weaviate-client>=4.6; needs running Weaviate)
+uv sync --extra chroma            # Chroma HNSW adapter (chromadb>=0.5; embedded or server mode)
 uv sync --extra local-inference   # llama.cpp / vLLM local model backends
 uv sync --extra training          # transformers + PEFT + MLflow fine-tuning
 uv sync --extra serving           # FastAPI + uvicorn
@@ -652,7 +653,7 @@ subclassing.  The table below lists the primary imports per layer.
 |---|---|---|---|
 | **rag** | `llm_agents.rag.pipeline` | `RagPipeline`, `GroundedAnswer` | [pipeline](docs/rag/pipeline.md) |
 | **rag** | `llm_agents.rag.embeddings` | `Embedder` (Protocol), `FakeEmbedder`, `BatchEmbedder` | [embeddings](docs/rag/embeddings.md) |
-| **rag** | `llm_agents.rag.vector_store` | `VectorStore` (Protocol), `InMemoryVectorStore`, `FAISSVectorStore`, `PgVectorStore`, `WeaviateVectorStore`, `SearchResult` | [vector_store](docs/rag/vector_store.md) |
+| **rag** | `llm_agents.rag.vector_store` | `VectorStore` (Protocol), `InMemoryVectorStore`, `FAISSVectorStore`, `PgVectorStore`, `WeaviateVectorStore`, `ChromaVectorStore`, `SearchResult` | [vector_store](docs/rag/vector_store.md) |
 | **rag** | `llm_agents.rag.indexing` | `Indexer`, `IndexReport` | [indexing](docs/rag/indexing.md) |
 | **rag** | `llm_agents.rag.retrieval` | `DenseRetriever`, `RetrievedPassage` | [retrieval](docs/rag/retrieval.md) |
 | **rag** | `llm_agents.rag.reranking` | `Reranker` (Protocol), `ScoreReranker`, `FakeReranker` | [reranking](docs/rag/reranking.md) |
@@ -722,7 +723,7 @@ print([p.doc_id for p in result.passages])
 
 #### 2. Swap to a FAISS, pgvector, or Weaviate backend
 
-All three adapters satisfy the `VectorStore` protocol and drop in anywhere `InMemoryVectorStore` is used:
+All four adapters satisfy the `VectorStore` protocol and drop in anywhere `InMemoryVectorStore` is used:
 
 ```python
 # FAISS (requires: uv sync --extra rag)
@@ -741,7 +742,13 @@ from llm_agents.rag.vector_store import WeaviateVectorStore
 client = weaviate.connect_to_local()
 store = WeaviateVectorStore(client, collection_name="RagDocs")
 
-# All three implement the same interface — swap into any pipeline without other changes:
+# Chroma (requires: uv sync --extra chroma; embedded or server mode)
+import chromadb
+from llm_agents.rag.vector_store import ChromaVectorStore
+chroma_client = chromadb.PersistentClient(path="/data/chroma")
+store = ChromaVectorStore(chroma_client, collection_name="rag_docs")
+
+# All four implement the same interface — swap into any pipeline without other changes:
 from llm_agents.rag.indexing import Indexer
 from llm_agents.rag.embeddings import FakeEmbedder
 indexer = Indexer(embedder=FakeEmbedder(dimensions=64), store=store)
