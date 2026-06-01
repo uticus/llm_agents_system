@@ -13,6 +13,7 @@ dev = [
     "pytest>=8.0",
     "ruff>=0.6",
     "pydantic>=2.0",
+    "numpy>=1.26",
 ]
 # Retrieval-augmented generation: embeddings + local vector index.
 rag = [

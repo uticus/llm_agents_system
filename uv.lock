@@ -2873,6 +2873,8 @@ delta-lake = [
     { name = "deltalake" },
 ]
 dev = [
+    { name = "numpy", version = "2.3.5", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.13'" },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.13'" },
     { name = "pydantic" },
     { name = "pytest" },
     { name = "ruff" },
@@ -2930,6 +2932,7 @@ requires-dist = [
     { name = "llama-cpp-python", marker = "extra == 'local-inference'", specifier = ">=0.3" },
     { name = "mlflow", marker = "extra == 'training'", specifier = ">=2.16" },
     { name = "nemoguardrails", marker = "extra == 'nemo'", specifier = ">=0.9" },
+    { name = "numpy", marker = "extra == 'dev'", specifier = ">=1.26" },
     { name = "openai", marker = "extra == 'openai'", specifier = ">=1.0" },
     { name = "peft", marker = "extra == 'training'", specifier = ">=0.13" },
     { name = "pgvector", marker = "extra == 'pgvector'", specifier = ">=0.3" },
