@@ -98,9 +98,7 @@ class SQLiteDeduplicationStore:
         import sqlite3  # deferred — keeps module importable without touching sqlite3
 
         self._conn = sqlite3.connect(str(path))
-        self._conn.execute(
-            "CREATE TABLE IF NOT EXISTS hashes (hash TEXT PRIMARY KEY)"
-        )
+        self._conn.execute("CREATE TABLE IF NOT EXISTS hashes (hash TEXT PRIMARY KEY)")
         self._conn.commit()
 
     def add(self, hash: str) -> None:
@@ -110,9 +108,7 @@ class SQLiteDeduplicationStore:
 
     def __contains__(self, hash: str) -> bool:  # type: ignore[override]
         """Return ``True`` if *hash* is present in the store."""
-        row = self._conn.execute(
-            "SELECT 1 FROM hashes WHERE hash = ?", (hash,)
-        ).fetchone()
+        row = self._conn.execute("SELECT 1 FROM hashes WHERE hash = ?", (hash,)).fetchone()
         return row is not None
 
     def reset(self) -> None:

@@ -165,6 +165,7 @@ class TestRagIndexingExports:
             InMemoryDeduplicationStore,
             SQLiteDeduplicationStore,
         )
+
         assert DeduplicationStore is not None
         assert InMemoryDeduplicationStore is not None
         assert SQLiteDeduplicationStore is not None
