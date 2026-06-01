@@ -81,7 +81,7 @@ rag/embeddings  (Embedder.embed)
     |
     | 4. vector search
     v
-rag/vector_store  (VectorStore.search — InMemoryVectorStore / FAISSVectorStore / PgVectorStore / WeaviateVectorStore / ChromaVectorStore)
+rag/vector_store  (VectorStore.search — InMemoryVectorStore / FAISSVectorStore / PgVectorStore / WeaviateVectorStore / ChromaVectorStore / ElasticsearchVectorStore)
     |
     | 5. optional rerank
     v
@@ -186,7 +186,7 @@ FineTuneResult(model_path, metrics, run_id, artifact_uri)
 | Module | Description | Doc |
 |---|---|---|
 | embeddings | `Embedder` Protocol, `FakeEmbedder`, `BatchEmbedder` | [rag/embeddings.md](rag/embeddings.md) |
-| vector_store | `VectorStore` Protocol, `InMemoryVectorStore` (cosine similarity), `FAISSVectorStore` (FAISS flat/cosine, `rag` extra), `PgVectorStore` (pgvector IVFFlat, `pgvector` extra), `WeaviateVectorStore` (Weaviate HNSW, `weaviate` extra), `ChromaVectorStore` (Chroma HNSW, `chroma` extra), `SearchResult` | [rag/vector_store.md](rag/vector_store.md) |
+| vector_store | `VectorStore` Protocol, `InMemoryVectorStore` (cosine similarity), `FAISSVectorStore` (FAISS flat/cosine, `rag` extra), `PgVectorStore` (pgvector IVFFlat, `pgvector` extra), `WeaviateVectorStore` (Weaviate HNSW, `weaviate` extra), `ChromaVectorStore` (Chroma HNSW, `chroma` extra), `ElasticsearchVectorStore` (ES 8+ dense_vector knn, `elasticsearch` extra), `SearchResult` | [rag/vector_store.md](rag/vector_store.md) |
 | indexing | `Indexer` (chunk → MD5 dedup → batch embed → upsert), `IndexReport` | [rag/indexing.md](rag/indexing.md) |
 | retrieval | `DenseRetriever` (embed → search → filter), `RetrievedPassage` | [rag/retrieval.md](rag/retrieval.md) |
 | reranking | `Reranker` Protocol, `FakeReranker`, `ScoreReranker` | [rag/reranking.md](rag/reranking.md) |
@@ -301,6 +301,12 @@ import chromadb
 from llm_agents.rag.vector_store import ChromaVectorStore
 chroma_client = chromadb.PersistentClient(path="/data/chroma")
 store = ChromaVectorStore(chroma_client, collection_name="rag_docs")
+
+# Elasticsearch 8+ knn (uv sync --extra elasticsearch + running ES instance)
+from elasticsearch import Elasticsearch
+from llm_agents.rag.vector_store import ElasticsearchVectorStore
+es_client = Elasticsearch("http://localhost:9200")
+store = ElasticsearchVectorStore(es_client, index_name="rag-docs", dimensions=1536)
 ```
 
 ```python
@@ -355,7 +361,8 @@ src/llm_agents/
   rag/
     embeddings/          Embedder, FakeEmbedder, BatchEmbedder
     vector_store/        VectorStore, InMemoryVectorStore, FAISSVectorStore,
-                         PgVectorStore, WeaviateVectorStore, ChromaVectorStore, SearchResult
+                         PgVectorStore, WeaviateVectorStore, ChromaVectorStore,
+                         ElasticsearchVectorStore, SearchResult
     indexing/            Indexer, IndexReport
     retrieval/           DenseRetriever, RetrievedPassage
     reranking/           Reranker, FakeReranker, ScoreReranker

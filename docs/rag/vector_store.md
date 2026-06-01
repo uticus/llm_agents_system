@@ -2,7 +2,7 @@
 
 ## Overview
 
-The vector store module provides persistent (or in-process) storage for embedding vectors and associated metadata, along with similarity search over those vectors. It is the core index that makes retrieval-augmented generation possible: at indexing time, chunk embeddings are written into the store; at retrieval time, a query embedding is used to find the nearest stored vectors. The module defines the `VectorStore` structural protocol, a `SearchResult` dataclass for query results, and five implementations: `InMemoryVectorStore` (brute-force in-memory, for tests and prototyping), `FAISSVectorStore` (FAISS flat inner-product index with lazy index rebuild, requires the `rag` extra), `PgVectorStore` (PostgreSQL pgvector extension, persistent and durable, requires the `pgvector` extra), `WeaviateVectorStore` (Weaviate HNSW, requires the `weaviate` extra), and `ChromaVectorStore` (Chroma HNSW with cosine similarity, requires the `chroma` extra). Production deployments swap in any backend behind the same protocol.
+The vector store module provides persistent (or in-process) storage for embedding vectors and associated metadata, along with similarity search over those vectors. It is the core index that makes retrieval-augmented generation possible: at indexing time, chunk embeddings are written into the store; at retrieval time, a query embedding is used to find the nearest stored vectors. The module defines the `VectorStore` structural protocol, a `SearchResult` dataclass for query results, and six implementations: `InMemoryVectorStore` (brute-force in-memory, for tests and prototyping), `FAISSVectorStore` (FAISS flat inner-product index with lazy index rebuild, requires the `rag` extra), `PgVectorStore` (PostgreSQL pgvector extension, persistent and durable, requires the `pgvector` extra), `WeaviateVectorStore` (Weaviate HNSW, requires the `weaviate` extra), `ChromaVectorStore` (Chroma HNSW with cosine similarity, requires the `chroma` extra), and `ElasticsearchVectorStore` (Elasticsearch 8+ dense_vector HNSW with cosine similarity, requires the `elasticsearch` extra). Production deployments swap in any backend behind the same protocol.
 
 ---
 
@@ -17,6 +17,7 @@ The vector store module provides persistent (or in-process) storage for embeddin
 | `PgVectorStore` | class | PostgreSQL pgvector-backed store with IVFFlat approximate search; requires `pgvector` extra. |
 | `WeaviateVectorStore` | class | Weaviate HNSW-backed store with cosine similarity; requires `weaviate` extra. |
 | `ChromaVectorStore` | class | Chroma HNSW-backed store with cosine similarity; requires `chroma` extra. |
+| `ElasticsearchVectorStore` | class | Elasticsearch 8+ dense_vector HNSW store with cosine similarity; requires `elasticsearch` extra. |
 
 ### `SearchResult`
 
@@ -153,6 +154,29 @@ class ChromaVectorStore:
 
 The caller provides an open Chroma client; the store does not manage the client lifecycle. Collection creation with `hnsw:space=cosine` happens lazily on the first `upsert` (or an explicit `ensure_collection()` call). Chroma's native `collection.upsert()` provides atomic insert-or-replace semantics — no check-then-branch is needed. Score is returned as `1.0 - cosine_distance`. Unlike other adapters, `chromadb` is never imported inside `_chroma_store.py` — all operations go through the injected client object, so the module imports cleanly without the `chroma` extra installed. Collection names are validated at construction time (3–63 chars, alphanumeric start/end, letters/digits/underscores/dots/hyphens, no consecutive dots).
 
+### `ElasticsearchVectorStore`
+
+Requires: `pip install llm-agents-system[elasticsearch]` (`elasticsearch>=8.0`) and a running Elasticsearch 8+ instance.
+
+```python
+class ElasticsearchVectorStore:
+    def __init__(
+        self,
+        client: Any,               # open elasticsearch.Elasticsearch client
+        index_name: str = "llm_vectors",
+        dimensions: int | None = None,
+    ) -> None: ...
+    def upsert(self, doc_id: str, vector: list[float], metadata: dict[str, Any] | None = None) -> None: ...
+    def search(self, query_vector: list[float], top_k: int = 5) -> list[SearchResult]: ...
+    def delete(self, doc_id: str) -> bool: ...
+    def ensure_index(self) -> None: ...  # explicit init for pre-existing indices
+
+    def __len__(self) -> int: ...
+    def __contains__(self, doc_id: str) -> bool: ...
+```
+
+The caller provides an open `elasticsearch.Elasticsearch` client; the store does not manage the client lifecycle. Index creation with a `dense_vector` mapping (HNSW, cosine similarity) happens lazily on the first `upsert`. The `doc_id` is used directly as the Elasticsearch `_id`, providing native insert-or-replace semantics via `client.index()` — no check-then-branch needed. `elasticsearch` is never imported inside `_elasticsearch_store.py` — all operations go through the injected client. Score conversion: Elasticsearch knn returns `(1 + cosine_similarity) / 2` to keep scores non-negative; the adapter reverses this: `score = _score * 2 - 1`, giving [-1, 1]. The `dense_vector` mapping requires `dims` at creation time; dimensions are inferred from the first `upsert`. Calling `ensure_index()` on a non-existent index without a `dimensions=` constructor arg raises `ValueError`. Index names are validated (lowercase letters/digits/underscores/hyphens, starts with letter or digit, max 255 chars).
+
 ---
 
 ## Architecture
@@ -175,6 +199,8 @@ The caller provides an open Chroma client; the store does not manage the client 
                               +-----------------------+
                        <---   | ChromaVectorStore     |  (embedded/server HNSW, chroma extra)
                               +-----------------------+
+                       <---   | ElasticsearchVectorStore | (ES 8+ knn, elasticsearch extra)
+                              +-----------------------+
         ^
         | search(query_vector, top_k)
         |
@@ -192,7 +218,8 @@ The vector store sits at the centre of the RAG data plane. Writes come from the 
 4. `PgVectorStore` issues `INSERT ... ON CONFLICT DO UPDATE` to PostgreSQL.
 5. `WeaviateVectorStore` calls `fetch_object_by_id` to check existence, then `data.insert` (new) or `data.replace` (update existing).
 6. `ChromaVectorStore` calls `collection.upsert(ids=[...], embeddings=[...], metadatas=[...])` — native atomic insert-or-replace, no check-then-branch needed.
-7. If the key already exists, the old entry is replaced (idempotent upsert) in all implementations.
+7. `ElasticsearchVectorStore` calls `client.index(index=..., id=doc_id, document={...})` — Elasticsearch replaces the document if the `_id` already exists (native atomic upsert).
+8. If the key already exists, the old entry is replaced (idempotent upsert) in all implementations.
 
 **Read path (retrieval):**
 1. `DenseRetriever` calls `store.search(query_vector, top_k=k)`.
@@ -201,7 +228,8 @@ The vector store sits at the centre of the RAG data plane. Writes come from the 
 4. `PgVectorStore`: executes `SELECT doc_id, 1.0 - (embedding <=> %s::vector) AS score FROM <table> ORDER BY dist LIMIT k` via the pgvector `<=>` cosine-distance operator.
 5. `WeaviateVectorStore`: calls `collection.query.near_vector(near_vector=..., limit=k, return_metadata=MetadataQuery(distance=True))`; score = `1.0 - obj.metadata.distance`.
 6. `ChromaVectorStore`: clamps `n_results = min(top_k, collection.count())`; calls `collection.query(query_embeddings=[...], n_results=n, include=["distances", "metadatas"])`; score = `1.0 - distance`.
-7. Results are returned as `list[SearchResult]` sorted by descending score.
+7. `ElasticsearchVectorStore`: calls `client.search(index=..., knn={"field": "embedding", "query_vector": ..., "k": top_k, ...}, size=top_k)`; score = `hit["_score"] * 2 - 1` (reverses ES's `(1 + cos_sim) / 2` normalisation).
+8. Results are returned as `list[SearchResult]` sorted by descending score.
 
 **Delete path:**
 1. Caller calls `store.delete(doc_id)`.
@@ -209,7 +237,8 @@ The vector store sits at the centre of the RAG data plane. Writes come from the 
 3. `PgVectorStore`: issues `DELETE FROM <table> WHERE doc_id = %s`; reads `rowcount` to determine whether a row existed.
 4. `WeaviateVectorStore`: calls `fetch_object_by_id(uuid5(doc_id))`; if not None, calls `data.delete_by_id(uuid)`.
 5. `ChromaVectorStore`: calls `collection.get(ids=[doc_id], include=[])` to check existence; if found, calls `collection.delete(ids=[doc_id])`.
-6. Returns `True` if the entry existed and was removed, `False` otherwise.
+6. `ElasticsearchVectorStore`: calls `client.exists(index=..., id=doc_id)`; if True, calls `client.delete(index=..., id=doc_id)`.
+7. Returns `True` if the entry existed and was removed, `False` otherwise.
 
 ### Key abstractions
 
@@ -226,6 +255,8 @@ The vector store sits at the centre of the RAG data plane. Writes come from the 
 **`WeaviateVectorStore`** uses the same injection pattern: the caller passes an open `weaviate.WeaviateClient`. Collection creation is lazy (first `upsert` or explicit `ensure_collection()`). Document identity in Weaviate requires a UUID; a deterministic UUID-5 is derived from `doc_id` using a fixed project namespace, eliminating the need for an internal ID-mapping dict. Metadata is stored as a JSON string in a `metadata_json` text property rather than as individual Weaviate properties, keeping the schema fixed and independent of metadata shape. Upsert is a check-then-branch: `fetch_object_by_id` determines whether to call `data.insert` or `data.replace`.
 
 **`ChromaVectorStore`** uses the same injection pattern: the caller passes an open Chroma client (`chromadb.Client` or `PersistentClient`). Collection creation with `hnsw:space=cosine` is lazy (first `upsert` or explicit `ensure_collection()`). Chroma's native `collection.upsert()` provides atomic insert-or-replace — no check-then-branch is required, unlike Weaviate. `chromadb` is never imported inside the adapter module; all calls go through the injected client, so the module loads cleanly without the `chroma` extra. Metadata is stored as a Chroma metadata dict (shallow-copied on write). Search clamps `n_results = min(top_k, collection.count())` to avoid Chroma raising when `n_results` exceeds stored items.
+
+**`ElasticsearchVectorStore`** uses the same injection pattern: the caller passes an open `elasticsearch.Elasticsearch` client. Index creation with a `dense_vector` (HNSW, cosine) mapping is lazy (first `upsert` or explicit `ensure_index()`). Elasticsearch's `client.index(id=doc_id, ...)` provides native atomic insert-or-replace — no existence check needed. `elasticsearch` is never imported inside the adapter module. Metadata is serialised as a JSON string in a `metadata_json` keyword field. Score conversion: ES knn returns `(1 + cos_sim) / 2` to satisfy Lucene's non-negative score requirement; the adapter converts back with `score = _score * 2 - 1`. Because `dense_vector` requires `dims` at index creation time, `ensure_index()` on a non-existent index requires `dimensions=` passed to the constructor; calling `upsert()` first avoids this constraint (dims inferred from the vector).
 
 ---
 
@@ -291,6 +322,22 @@ The vector store sits at the centre of the RAG data plane. Writes come from the 
   **Why**: Chroma raises `chromadb.errors.InvalidCollectionException` (or similar) if `n_results` exceeds the number of stored items. The clamp avoids this edge case and makes search idempotent on sparse collections.
   **Tradeoff**: An extra `collection.count()` call per search adds one round-trip. This is acceptable; alternatives (catch-and-return-empty) would obscure the failure mode.
 
+- **Decision**: `ElasticsearchVectorStore` uses `client.index(id=doc_id, ...)` for native atomic upsert.
+  **Why**: Elasticsearch replaces the document if `_id` already exists, making `client.index()` inherently an upsert. No existence check or check-then-branch is needed, unlike Weaviate. Using `doc_id` directly as `_id` keeps the mapping stateless (no UUID generation needed, unlike Weaviate).
+  **Tradeoff**: None — this is the standard Elasticsearch upsert pattern. The alternative (`_update` with `doc_as_upsert=True`) offers partial-update semantics but is unnecessary here since the full document is always provided.
+
+- **Decision**: `ElasticsearchVectorStore` converts knn `_score` to cosine similarity via `score = _score * 2 - 1`.
+  **Why**: Elasticsearch knn scores are `(1 + cosine_similarity) / 2` because Lucene requires non-negative scores. All other `VectorStore` implementations return cosine similarity in [-1, 1]; the conversion keeps the returned score consistent across backends.
+  **Tradeoff**: The conversion assumes the caller is using `similarity: "cosine"` in the mapping. Using a different similarity function (e.g. `l2_norm`) would produce incorrect converted scores. The adapter enforces cosine in the mapping it creates; callers using a pre-existing index with a different similarity are responsible for correct interpretation.
+
+- **Decision**: `ElasticsearchVectorStore.ensure_index()` raises `ValueError` when called on a non-existent index without `dimensions=`.
+  **Why**: Elasticsearch `dense_vector` fields require `dims` to be declared at mapping creation time. Unlike Chroma and Weaviate (which do not embed dims in the schema), there is no way to create the index without knowing the vector dimensionality.
+  **Tradeoff**: Callers who want to call `ensure_index()` to connect to a pre-existing index (the common explicit-init use case) are not affected; the constraint only applies to index creation. Callers who want to create the index explicitly must pass `dimensions=` to the constructor.
+
+- **Decision**: `ElasticsearchVectorStore` stores metadata as a JSON string in a `metadata_json` keyword field.
+  **Why**: Same rationale as Weaviate: dynamic metadata shapes (varying keys per document) cannot be accommodated in a static Elasticsearch mapping without using a `dynamic: true` object field. A JSON string keeps the schema fixed.
+  **Tradeoff**: Metadata fields cannot be filtered at the Elasticsearch query layer without extracting the JSON string. If pre-search metadata filtering is required, use a `dynamic: true` object field or individual top-level properties.
+
 ---
 
 ## Scaling concerns
@@ -310,6 +357,9 @@ The vector store sits at the centre of the RAG data plane. Writes come from the 
 - **ChromaVectorStore — count() on every search**: `search` calls `collection.count()` before querying to clamp `n_results`. For very high-throughput search, this adds a round-trip per query. Mitigation: cache the count or raise the minimum at which Chroma starts refusing.
 - **ChromaVectorStore — client lifecycle**: The store does not call `client.reset()` or any teardown method. The caller is responsible for managing the Chroma client lifecycle (especially with `PersistentClient` which persists to disk).
 - **ChromaVectorStore — concurrency**: Chroma's embedded client is not thread-safe. For concurrent writes use Chroma server mode (`HttpClient`) and one `ChromaVectorStore` per thread, or wrap with an external lock.
+- **ElasticsearchVectorStore — refresh lag**: Documents written via `client.index()` are not immediately searchable. Elasticsearch uses a background refresh cycle (default 1 second). For tests or scenarios that require immediate visibility, call `client.indices.refresh(index=...)` after writes, or pass `refresh="wait_for"` to `client.index()`.
+- **ElasticsearchVectorStore — num_candidates tuning**: The adapter uses `num_candidates = max(top_k * 10, top_k + 1)` for knn search. This is a sensible default; for high-recall workloads or very large corpora, increasing `num_candidates` (at the cost of higher latency) may be necessary. The parameter is not currently exposed as a constructor argument.
+- **ElasticsearchVectorStore — metadata filtering**: Metadata is stored as a JSON string and cannot be filtered at the Elasticsearch query layer without JSON path extraction. For pre-search metadata filtering, restructure the mapping to use individual top-level fields or a `dynamic: true` object.
 - **All implementations — concurrency**: None of the implementations serialise concurrent access. Wrap in a lock or use connection pools (pgvector) for concurrent production workloads.
 
 ---
@@ -320,7 +370,9 @@ The vector store sits at the centre of the RAG data plane. Writes come from the 
 - **Async PgVectorStore**: Add `AsyncPgVectorStore` using `psycopg` async API (`await conn.execute(...)`) for use in async serving paths without blocking the event loop.
 - **PgVectorStore metadata filtering**: Extend `search` with an optional `filters: dict[str, Any]` parameter that appends `WHERE metadata @> %s::jsonb` to the query for pre-search filtering. This would require a protocol extension or a subclass.
 - **PgVectorStore connection pool**: Accept a `psycopg_pool.ConnectionPool` in addition to a bare connection, and acquire/release connections per operation for concurrent workloads.
-- **Elasticsearch adapter**: Add an adapter for Elasticsearch with the `dense_vector` field and `script_score` or `knn` query for approximate nearest-neighbour search.
+- **ElasticsearchVectorStore num_candidates**: Expose `num_candidates` as a constructor parameter (default `max(top_k * 10, top_k + 1)`) so callers can tune the HNSW recall/speed trade-off per use case.
+- **ElasticsearchVectorStore async client**: Add `AsyncElasticsearchVectorStore` using the `AsyncElasticsearch` client for use in async serving paths without blocking the event loop.
+- **ElasticsearchVectorStore metadata filtering**: Extend `search` with an optional `filters: dict[str, Any]` parameter that appends a `filter` clause to the `knn` query for pre-search metadata filtering.
 - **Bulk upsert**: Add an `upsert_batch(entries: list[tuple[str, list[float], dict]]) -> None` method to the protocol for efficient bulk loading. PostgreSQL COPY, FAISS `index.add(matrix)`, and Weaviate batch APIs all support bulk ingestion with far lower overhead than sequential upsert.
 - **FAISSVectorStore HNSW mode**: Add a `metric` parameter to `FAISSVectorStore` (default `"cosine"`, option `"l2"`) and switch to `IndexHNSWFlat` for approximate search when exact search latency is unacceptable at scale.
 - **WeaviateVectorStore metadata schema**: Add an optional `extra_properties` parameter to `WeaviateVectorStore` that defines additional Weaviate object properties for fields that need to be filterable at query time.
@@ -460,6 +512,33 @@ store.ensure_collection()  # connect to existing collection; no upsert needed
 results = store.search(query_embedding, top_k=10)
 ```
 
+**Elasticsearch adapter (requires `elasticsearch` extra):**
+
+```python
+from elasticsearch import Elasticsearch
+from llm_agents.rag.vector_store import ElasticsearchVectorStore
+
+client = Elasticsearch("http://localhost:9200")
+store = ElasticsearchVectorStore(client, index_name="rag_docs", dimensions=1536)
+
+# first upsert creates the index with dense_vector (HNSW, cosine)
+store.upsert("doc1", embedding_vector, {"source": "wiki"})
+store.upsert("doc1", new_embedding, {"source": "wiki_v2"})  # atomic replace
+
+results = store.search(query_embedding, top_k=5)
+for r in results:
+    print(r.doc_id, round(r.score, 3), r.metadata)
+```
+
+Query a pre-existing Elasticsearch index (without upserting first):
+
+```python
+# Index already exists — pass dimensions= to the constructor so ensure_index() succeeds
+store = ElasticsearchVectorStore(client, index_name="existing-docs", dimensions=1536)
+store.ensure_index()  # connects to existing index; no upsert needed
+results = store.search(query_embedding, top_k=10)
+```
+
 **Swapping backends transparently (protocol-driven):**
 
 ```python
@@ -469,6 +548,6 @@ def build_index(store: VectorStore, docs: list[tuple[str, list[float]]]) -> None
     for doc_id, vec in docs:
         store.upsert(doc_id, vec)
 
-# Works identically with InMemoryVectorStore, FAISSVectorStore, PgVectorStore, or ChromaVectorStore
+# Works identically with any VectorStore implementation
 build_index(InMemoryVectorStore(), [("a", [1.0, 0.0]), ("b", [0.0, 1.0])])
 ```

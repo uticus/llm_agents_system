@@ -53,6 +53,10 @@ weaviate = [
 chroma = [
     "chromadb>=0.5",
 ]
+# Elasticsearch vector-store adapter (requires a running Elasticsearch 8+ instance).
+elasticsearch = [
+    "elasticsearch>=8.0",
+]
 # Data connectors and document parsers for ingestion.
 data = [
     "psycopg[binary]>=3.2",
