@@ -125,31 +125,32 @@ class Indexer:
         chunks: list[str] = self._chunker(text)
         meta = dict(metadata) if metadata else {}
 
-        # Filter chunks that haven't changed since last index
-        new_chunks: list[tuple[int, str]] = []
+        # Filter chunks that haven't changed since last index.
+        # Store (idx, text, hash) so the hash is computed exactly once per chunk.
+        new_chunks: list[tuple[int, str, str]] = []
         for idx, chunk in enumerate(chunks):
             h = _content_hash(chunk)
             if h in self._dedup_store:
                 report.chunks_skipped += 1
             else:
-                new_chunks.append((idx, chunk))
+                new_chunks.append((idx, chunk, h))
 
         if not new_chunks:
             return report
 
         # Embed all new chunks in a single batch call
-        texts = [c for _, c in new_chunks]
+        texts = [c for _, c, _ in new_chunks]
         try:
             vectors = self._embedder.embed(texts)
         except Exception as exc:  # noqa: BLE001
             report.errors.append(f"{doc_id}: embed error — {exc}")
             return report
 
-        for (idx, chunk), vector in zip(new_chunks, vectors, strict=False):
+        for (idx, _chunk, h), vector in zip(new_chunks, vectors, strict=False):
             chunk_id = _chunk_id(doc_id, idx)
             chunk_meta = {**meta, "doc_id": doc_id, "chunk_index": idx}
             self._vector_store.upsert(chunk_id, vector, metadata=chunk_meta)
-            self._dedup_store.add(_content_hash(chunk))
+            self._dedup_store.add(h)
             report.chunks_added += 1
 
         return report
