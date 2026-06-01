@@ -13,10 +13,12 @@ The `evaluation/benchmarking` module provides infrastructure for running structu
 | Name | Kind | Description |
 |---|---|---|
 | `BenchmarkTask` | dataclass | A single task with a unique ID, input, and expected output. |
-| `Suite` | dataclass | Named ordered collection of `BenchmarkTask` objects. |
+| `Suite` | dataclass | Named ordered collection of `BenchmarkTask` objects; includes `from_jsonl` class method. |
 | `TaskResult` | dataclass | Execution outcome for one task, including tokens, cost, latency, and cache hit. |
 | `BenchmarkReport` | dataclass | Aggregated statistics for a completed suite run. |
 | `BenchmarkRunner` | class | Async runner that executes a `Suite` and produces a `BenchmarkReport`. |
+| `BUILTIN_SUITES` | dict | Five ready-to-run `Suite` objects keyed by name. |
+| `BUILTIN_AGENTS` | dict | Paired async agent callables for each built-in suite. |
 
 ### BenchmarkTask
 
@@ -81,6 +83,34 @@ async run(suite: Suite) -> BenchmarkReport
 ```
 
 `agent_fn` may return a plain `str` or any object with `.output`, `.prompt_tokens`, `.completion_tokens`, `.cost_usd`, and `.cache_hit` attributes. `scorer` defaults to exact string equality. Returns a `BenchmarkReport` with one `TaskResult` per task.
+
+### Suite.from_jsonl
+
+```
+Suite.from_jsonl(
+    path: str | Path,
+    *,
+    name: str | None = None,
+) -> Suite
+```
+
+Loads a `Suite` from a JSONL file. Each line must be a JSON object with `task_id`, `input`, and `expected_output` keys. An optional `metadata` dict key is preserved. Blank lines are silently skipped. The suite name defaults to the file stem if `name` is not provided.
+
+### Built-in suites and agents
+
+```python
+from llm_agents.evaluation.benchmarking import BUILTIN_SUITES, BUILTIN_AGENTS
+```
+
+`BUILTIN_SUITES` maps suite name to `Suite` instance. `BUILTIN_AGENTS` maps the same name to the paired async agent callable. All five built-in suites produce 100 % success rate when run against their paired agent.
+
+| Suite key | Tasks | Agent type | What it exercises |
+|---|---|---|---|
+| `tiny` | 3 | dict lookup | Harness smoke test |
+| `arithmetic` | 50 | Python `eval` | Arithmetic expression evaluation |
+| `qa_lookup` | 30 | dict lookup | Factual knowledge retrieval |
+| `hallucination` | 25 | `OverlapDetector` | Passage/claim grounding verification |
+| `classification` | 20 | keyword counting | Sentiment classification |
 
 ---
 
@@ -167,10 +197,10 @@ Like the evaluation harness, the runner is sequential. For large suites (hundred
 ## Future improvements
 
 - **Concurrent task execution**: add a `concurrency` parameter to `BenchmarkRunner.run` that uses `asyncio.Semaphore` to cap simultaneous agent calls, allowing throughput to scale with available API rate limit.
-- **Suite loading from files**: add a `Suite.from_jsonl(path)` class method to load tasks from a JSONL file, matching the pattern in `DatasetLoader.from_jsonl`.
 - **Percentile threshold enforcement**: enforce the "fewer than 20 tasks" precondition in `_build_report` and store a `p95_valid: bool` flag in `BenchmarkReport` rather than relying on callers to remember the limitation.
-- **Suite registry**: replace the hard-coded `_SUITES` dict in `__main__` with a file-system-based registry that discovers JSONL suite files from a configured directory.
+- **File-system suite registry**: extend `__main__` to discover JSONL suite files from a configured directory, enabling external suite definitions without code changes.
 - **Incremental reporting**: emit intermediate `BenchmarkReport` snapshots as tasks complete, enabling progress monitoring for long-running suite runs.
+- **LLM-backed agent suites**: add suites that wire real LLM backends (`OpenAIBackend`, `LlamaCppBackend`) to measure actual groundedness, hallucination rate, F1, and cost metrics across deployment profiles.
 
 ---
 
@@ -206,10 +236,39 @@ runner = BenchmarkRunner(
 report = asyncio.run(runner.run(suite))
 ```
 
-CLI usage (built-in tiny suite):
+Using a built-in suite with its paired agent:
 
+```python
+import asyncio
+from llm_agents.evaluation.benchmarking import (
+    BUILTIN_AGENTS, BUILTIN_SUITES, BenchmarkRunner,
+)
+
+suite = BUILTIN_SUITES["arithmetic"]          # 50 arithmetic tasks
+agent = BUILTIN_AGENTS["arithmetic"]          # Python eval agent
+runner = BenchmarkRunner(agent_fn=agent)
+report = asyncio.run(runner.run(suite))
+print(f"success_rate={report.success_rate:.3f}")     # 1.000
+print(f"p95_latency={report.p95_latency_s*1e6:.1f}µs")
 ```
-python -m llm_agents.evaluation.benchmarking --suite tiny
+
+Loading a suite from a JSONL file:
+
+```python
+from llm_agents.evaluation.benchmarking import Suite
+
+suite = Suite.from_jsonl("/data/my_tasks.jsonl", name="my-benchmark")
+print(f"Loaded {len(suite.tasks)} tasks from {suite.name}")
+```
+
+CLI usage:
+
+```bash
+# Single suite
+python -m llm_agents.evaluation.benchmarking --suite arithmetic
+
+# All five built-in suites (JSON array)
+python -m llm_agents.evaluation.benchmarking --suite all
 ```
 
 Inspecting per-task results:

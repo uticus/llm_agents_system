@@ -2,12 +2,22 @@
 
 Usage::
 
-    python -m llm_agents.evaluation.benchmarking --suite tiny
+    # Run a single built-in suite:
+    python -m llm_agents.evaluation.benchmarking --suite arithmetic
 
-Prints a JSON report to stdout.
+    # Run all built-in suites and print a JSON array of reports:
+    python -m llm_agents.evaluation.benchmarking --suite all
 
-The built-in ``tiny`` suite contains three arithmetic tasks answered by a
-stub agent that echoes the expected answer (for demonstration/testing only).
+Prints a JSON report (dict for a single suite, list of dicts for ``all``)
+to stdout.
+
+Built-in suites
+---------------
+- ``tiny``          — 3 arithmetic tasks (demo / smoke test)
+- ``arithmetic``    — 50 arithmetic expressions
+- ``qa_lookup``     — 30 factual Q&A pairs
+- ``hallucination`` — 25 passage/claim verification tasks
+- ``classification``— 20 sentiment classification tasks
 """
 
 from __future__ import annotations
@@ -17,53 +27,45 @@ import asyncio
 import json
 import sys
 
-from llm_agents.evaluation.benchmarking._models import BenchmarkTask, Suite
 from llm_agents.evaluation.benchmarking._runner import BenchmarkRunner
+from llm_agents.evaluation.benchmarking._suites import BUILTIN_AGENTS, BUILTIN_SUITES
 
 
-def _build_tiny_suite() -> Suite:
-    """Return a minimal three-task demonstration suite."""
-    tasks = [
-        BenchmarkTask(task_id="t1", input="2+2", expected_output="4"),
-        BenchmarkTask(task_id="t2", input="3*3", expected_output="9"),
-        BenchmarkTask(task_id="t3", input="10-1", expected_output="9"),
-    ]
-    return Suite(name="tiny", tasks=tasks)
-
-
-_SUITES: dict[str, Suite] = {
-    "tiny": _build_tiny_suite(),
-}
-
-_STUB_ANSWERS: dict[str, str] = {
-    "2+2": "4",
-    "3*3": "9",
-    "10-1": "9",
-}
-
-
-async def _run_suite(suite_name: str) -> dict:
-    suite = _SUITES.get(suite_name)
-    if suite is None:
-        print(f"Unknown suite: {suite_name!r}. Available: {list(_SUITES)}", file=sys.stderr)
-        sys.exit(1)
-
-    async def stub_agent(input_text: str) -> str:
-        return _STUB_ANSWERS.get(input_text, "")
-
-    runner = BenchmarkRunner(agent_fn=stub_agent)
-    report = await runner.run(suite)
-
+def _report_to_dict(report: object) -> dict:
     return {
-        "suite_name": report.suite_name,
-        "success_rate": report.success_rate,
-        "mean_tokens": report.mean_tokens,
-        "mean_latency_s": report.mean_latency_s,
-        "p95_latency_s": report.p95_latency_s,
-        "mean_cost_usd": report.mean_cost_usd,
-        "cache_hit_rate": report.cache_hit_rate,
-        "total_tasks": len(report.task_results),
+        "suite_name": report.suite_name,  # type: ignore[union-attr]
+        "success_rate": report.success_rate,  # type: ignore[union-attr]
+        "mean_tokens": report.mean_tokens,  # type: ignore[union-attr]
+        "mean_latency_s": report.mean_latency_s,  # type: ignore[union-attr]
+        "p95_latency_s": report.p95_latency_s,  # type: ignore[union-attr]
+        "mean_cost_usd": report.mean_cost_usd,  # type: ignore[union-attr]
+        "cache_hit_rate": report.cache_hit_rate,  # type: ignore[union-attr]
+        "total_tasks": len(report.task_results),  # type: ignore[union-attr]
     }
+
+
+async def _run_single(suite_name: str) -> dict:
+    suite = BUILTIN_SUITES.get(suite_name)
+    if suite is None:
+        available = list(BUILTIN_SUITES) + ["all"]
+        print(
+            f"Unknown suite: {suite_name!r}. Available: {available}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    agent_fn = BUILTIN_AGENTS[suite_name]
+    runner = BenchmarkRunner(agent_fn=agent_fn)
+    report = await runner.run(suite)
+    return _report_to_dict(report)
+
+
+async def _run_suite(suite_name: str) -> dict | list[dict]:
+    if suite_name == "all":
+        results: list[dict] = []
+        for name in BUILTIN_SUITES:
+            results.append(await _run_single(name))
+        return results
+    return await _run_single(suite_name)
 
 
 def main() -> None:
@@ -73,7 +75,10 @@ def main() -> None:
     parser.add_argument(
         "--suite",
         default="tiny",
-        help="Suite name to run (default: tiny).",
+        help=(
+            "Suite name to run (default: tiny).  "
+            f"Available: {list(BUILTIN_SUITES) + ['all']}"
+        ),
     )
     args = parser.parse_args()
     result = asyncio.run(_run_suite(args.suite))

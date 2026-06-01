@@ -1,0 +1,4 @@
+{"task_id": "s1", "input": "hello", "expected_output": "hello", "metadata": {"category": "echo"}}
+{"task_id": "s2", "input": "world", "expected_output": "world"}
+
+{"task_id": "s3", "input": "foo", "expected_output": "bar", "metadata": {}}

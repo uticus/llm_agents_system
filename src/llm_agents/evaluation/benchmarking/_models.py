@@ -8,7 +8,9 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 
@@ -34,12 +36,57 @@ class Suite:
     """A named collection of :class:`BenchmarkTask` objects.
 
     Args:
-        name:  Suite identifier (e.g. ``"tiny"``, ``"gsm8k"``).
+        name:  Suite identifier (e.g. ``"tiny"``, ``"arithmetic"``).
         tasks: Ordered list of tasks to execute.
     """
 
     name: str
     tasks: list[BenchmarkTask] = field(default_factory=list)
+
+    @classmethod
+    def from_jsonl(
+        cls,
+        path: str | Path,
+        *,
+        name: str | None = None,
+    ) -> "Suite":
+        """Load a :class:`Suite` from a JSONL file.
+
+        Each line must be a JSON object with ``task_id``, ``input``, and
+        ``expected_output`` keys.  An optional ``metadata`` key (dict) is
+        preserved on the resulting :class:`BenchmarkTask`.  Blank lines are
+        silently skipped.
+
+        Args:
+            path: Path to the ``.jsonl`` file.
+            name: Suite name.  Defaults to the file stem (filename without
+                  extension).
+
+        Returns:
+            A :class:`Suite` populated with one task per non-empty line.
+
+        Raises:
+            FileNotFoundError: if *path* does not exist.
+            KeyError: if a line is missing ``task_id``, ``input``, or
+                      ``expected_output``.
+        """
+        p = Path(path)
+        suite_name = name if name is not None else p.stem
+        tasks: list[BenchmarkTask] = []
+        for line in p.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            obj = json.loads(line)
+            tasks.append(
+                BenchmarkTask(
+                    task_id=obj["task_id"],
+                    input=obj["input"],
+                    expected_output=obj["expected_output"],
+                    metadata=obj.get("metadata", {}),
+                )
+            )
+        return cls(name=suite_name, tasks=tasks)
 
 
 @dataclass

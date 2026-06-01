@@ -12,6 +12,10 @@ Runner::
 
     from llm_agents.evaluation.benchmarking import BenchmarkRunner
 
+Built-in suites and agents::
+
+    from llm_agents.evaluation.benchmarking import BUILTIN_SUITES, BUILTIN_AGENTS
+
 Usage example::
 
     suite = Suite(name="my_suite", tasks=[...])
@@ -21,7 +25,8 @@ Usage example::
 
 CLI::
 
-    python -m llm_agents.evaluation.benchmarking --suite tiny
+    python -m llm_agents.evaluation.benchmarking --suite arithmetic
+    python -m llm_agents.evaluation.benchmarking --suite all
 """
 
 from llm_agents.evaluation.benchmarking._models import (
@@ -31,8 +36,11 @@ from llm_agents.evaluation.benchmarking._models import (
     TaskResult,
 )
 from llm_agents.evaluation.benchmarking._runner import BenchmarkRunner
+from llm_agents.evaluation.benchmarking._suites import BUILTIN_AGENTS, BUILTIN_SUITES
 
 __all__ = [
+    "BUILTIN_AGENTS",
+    "BUILTIN_SUITES",
     "BenchmarkReport",
     "BenchmarkRunner",
     "BenchmarkTask",

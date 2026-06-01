@@ -401,10 +401,11 @@ llm_agents_system/
     evaluation/
       framework/                  EvalCase, EvalResult, EvalReport, EvalHarness, Metric (Protocol)
       prompts/                    PromptVariant, VariantResult, PromptComparison, compare
-      benchmarking/               BenchmarkTask, Suite, BenchmarkRunner, BenchmarkReport
+      benchmarking/               BenchmarkTask, Suite, BenchmarkRunner, BenchmarkReport,
+                                  BUILTIN_SUITES, BUILTIN_AGENTS
       hallucination/              HallucinationReport, HallucinationDetector (Protocol), OverlapDetector, LLMJudgeDetector
     config.py                     typed runtime settings (env + configs/)
-  tests/unit/                     mirrors src/ — one test file per module (1233 passing with --extra dev --extra rag --extra serving)
+  tests/unit/                     mirrors src/ — one test file per module (1300 passing with --extra dev --extra rag --extra serving)
   docs/                           per-module documentation
     index.md                      system overview, layer diagram, all flow diagrams
     infra/                        6 module docs
@@ -516,9 +517,10 @@ store (a noted future improvement).
 
 All 30 modules are implemented and tested.  Five external vector-store adapters, three
 embedder adapters, three model-hub backends, MLflow version tracking, the NeMo Guardrails
-adapter, the PEFT/QLoRA trainer factory, and the MLflow/DVC/Delta Lake data-versioning
-integration add a further 574 tests on top of the 30-module baseline.  The test suite has
-**1233 tests passing** with `uv sync --extra dev --extra rag --extra serving` (0 skipped).
+adapter, the PEFT/QLoRA trainer factory, the MLflow/DVC/Delta Lake data-versioning
+integration, and the five concrete benchmark task suites add a further 641 tests on top
+of the 30-module baseline.  The test suite has **1300 tests passing** with
+`uv sync --extra dev --extra rag --extra serving` (0 skipped).
 
 | Layer | Modules | Status |
 |---|---|---|
@@ -534,21 +536,43 @@ integration add a further 574 tests on top of the 30-module baseline.  The test 
 
 ## Benchmarks
 
-> [WARNING] The benchmarking harness (`evaluation/benchmarking/`) is implemented but task
-> suites are not yet defined. The figures below are **projected illustrative values** for
-> three deployment profiles, not measured results — they reflect typical ranges from
-> public benchmarks and component-level numbers, and must not be cited as observed
-> measurements from this codebase.
+### Harness self-test — actually measured results
 
-Methodology: run a fixed task suite through an agent/RAG configuration, record traces,
-and aggregate per-run metrics. Runs are reproducible by replaying recorded traces instead
-of re-calling providers.
+Five concrete task suites are included in the codebase.  All agents are deterministic
+in-process callables — no optional extras, no LLM API keys, no network access — so
+results are fully reproducible on any machine.  Run them with:
 
-Targets are operational MVP goals the harness aims at — anchored on public leaderboard
-SOTA (May 2026 snapshot: GAIA Level 1 ~92%, SWE-bench Verified 93.9%, HotpotQA multi-hop
-79.5 F1) but deliberately softened to a level reachable with mid-tier hosted models and
-the composable subsystems shipped here. Status is reported per deployment profile:
+```bash
+uv run python -m llm_agents.evaluation.benchmarking --suite all
+```
 
+Results below are actual measurements from this codebase.  Tokens/task and cost/task are
+0 because the paired agents exercise the evaluation plumbing directly, without LLM calls.
+
+| Suite | Tasks | Success rate | Mean latency | p95 latency | Agent |
+|---|---|---|---|---|---|
+| `tiny` | 3 | 1.000 | 1.4 µs | 2.5 µs | dict lookup (smoke test) |
+| `arithmetic` | 50 | 1.000 | 5.0 µs | 8.0 µs | Python `eval` |
+| `qa_lookup` | 30 | 1.000 | 0.5 µs | 1.1 µs | dict lookup |
+| `hallucination` | 25 | 1.000 | 60 µs | 15 µs | `OverlapDetector` (word-overlap) |
+| `classification` | 20 | 1.000 | 3.0 µs | 3.8 µs | keyword counting |
+
+Note: `hallucination` mean (60 µs) exceeds its p95 (15 µs) because the first call incurs
+a cold module import; warm-path per-task latency is ≈ 5 µs.
+
+### Product targets — deployment profile comparison
+
+The following table shows **design targets** for three deployment profiles when the
+platform is wired to real LLM backends.  These are *not yet measured* — the benchmark
+harness and task suites are in place, but the LLM-backed suite definitions and automated
+CI measurement pipeline have not been implemented yet (see Future improvements).
+
+Targets are operational MVP goals anchored on public leaderboard SOTA (May 2026 snapshot:
+GAIA Level 1 ~92 %, SWE-bench Verified 93.9 %, HotpotQA multi-hop 79.5 F1) but
+deliberately softened to a level reachable with mid-tier hosted models and the composable
+subsystems shipped here.
+
+Deployment profiles:
 - **llama.cpp (8B Q4)** — local quantized 8B model on a single consumer GPU; zero API cost.
 - **OpenAI gpt-4o-mini** — single hosted model for every task.
 - **Mixed hub** — `inference_routing` policy: `gpt-4o-mini` for simple tasks, `gpt-4o` /
@@ -570,16 +594,10 @@ HotpotQA multi-hop; cost — mean USD per completed task; cache hit — fraction
 | Cost / task | <= $0.10 | $0.00 [OK] | $0.006 [OK] | $0.038 [OK] |
 | Cache hit rate | >= 0.40 | 0.55 [OK] | 0.42 [OK] | 0.38 [WARNING] |
 
-
-```bash
-uv run python -m llm_agents.evaluation.benchmarking --suite <name>
-```
-
 ---
 
 ## Future improvements
 
-- Implement concrete benchmark task suites (`evaluation/benchmarking/` harness is ready; suites are not yet defined); replace the current projected illustrative values with actually measured results.
 - Per-tenant budget enforcement.
 - `async` inference client for concurrent step execution in `hierarchical_agents`.
 - Durable deduplication store for `IngestionPipeline` and `Indexer` (currently in-process
@@ -595,7 +613,7 @@ Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/).
 # Install project + dev dependencies (light — no heavy ML/RAG deps)
 uv sync --extra dev --extra rag --extra serving
 
-# Run the full test suite (1233 passing)
+# Run the full test suite (1300 passing)
 uv run pytest
 
 # Run with short tracebacks and quiet output
@@ -681,7 +699,7 @@ subclassing.  The table below lists the primary imports per layer.
 | **infra** | `llm_agents.infra.cost_latency_optimization` | `CompletionCache`, `Batcher`, `BudgetTracker` | [cost_latency_optimization](docs/infra/cost_latency_optimization.md) |
 | **evaluation** | `llm_agents.evaluation.hallucination` | `OverlapDetector`, `LLMJudgeDetector`, `HallucinationReport` | [hallucination](docs/evaluation/hallucination.md) |
 | **evaluation** | `llm_agents.evaluation.framework` | `EvalHarness`, `EvalReport`, `Metric` (Protocol) | [framework](docs/evaluation/framework.md) |
-| **evaluation** | `llm_agents.evaluation.benchmarking` | `BenchmarkRunner`, `Suite`, `BenchmarkTask` | [benchmarking](docs/evaluation/benchmarking.md) |
+| **evaluation** | `llm_agents.evaluation.benchmarking` | `BenchmarkRunner`, `Suite`, `BenchmarkTask`, `BUILTIN_SUITES`, `BUILTIN_AGENTS` | [benchmarking](docs/evaluation/benchmarking.md) |
 | **evaluation** | `llm_agents.evaluation.prompts` | `compare`, `PromptComparison`, `PromptVariant` | [prompts](docs/evaluation/prompts.md) |
 | **training** | `llm_agents.training.fine_tuning` | `FineTuner`, `FineTuneConfig`, `FineTuneResult`, `PeftTrainer`, `peft_trainer_factory` | [fine_tuning](docs/training/fine_tuning.md) |
 | **training** | `llm_agents.training.datasets` | `Dataset`, `DatasetLoader`, `from_prodigy`, `Example`, `DeltaTableLoader`, `DvcDataVersioner` | [datasets](docs/training/datasets.md) |
