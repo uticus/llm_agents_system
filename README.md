@@ -339,7 +339,7 @@ FineTuneResult(model_path, metrics, run_id, artifact_uri)
 
 | Subsystem | Package | Responsibility | Doc |
 |---|---|---|---|
-| Fine-tuning | `training/fine_tuning/` | `FineTuner` with pluggable `trainer_factory`; PEFT-ready | [fine_tuning](docs/training/fine_tuning.md) |
+| Fine-tuning | `training/fine_tuning/` | `FineTuner` + `peft_trainer_factory` (default); `PeftTrainer` wraps HuggingFace Trainer; QLoRA via `use_4bit=True` | [fine_tuning](docs/training/fine_tuning.md) |
 | Datasets | `training/datasets/` | `Dataset` (split, validate, version hash); Prodigy normaliser | [datasets](docs/training/datasets.md) |
 | Experiment tracking | `training/experiment_tracking/` | `Tracker` Protocol; `NoOpTracker`, `InMemoryTracker` | [experiment_tracking](docs/training/experiment_tracking.md) |
 
@@ -391,7 +391,8 @@ llm_agents_system/
     serving/
       api/                        create_app, build_router, ChatRequest, RagRequest, HealthResponse
     training/
-      fine_tuning/                FineTuner, FineTuneConfig, FineTuneResult
+      fine_tuning/                FineTuner, FineTuneConfig, FineTuneResult,
+                                  PeftTrainer, peft_trainer_factory
       datasets/                   Dataset, Example, DatasetLoader, from_prodigy
       experiment_tracking/        Tracker (Protocol), NoOpTracker, InMemoryTracker
     evaluation/
@@ -400,7 +401,7 @@ llm_agents_system/
       benchmarking/               BenchmarkTask, Suite, BenchmarkRunner, BenchmarkReport
       hallucination/              HallucinationReport, HallucinationDetector (Protocol), OverlapDetector, LLMJudgeDetector
     config.py                     typed runtime settings (env + configs/)
-  tests/unit/                     mirrors src/ — one test file per module (1129 passing with --extra dev --extra rag --extra serving)
+  tests/unit/                     mirrors src/ — one test file per module (1168 passing with --extra dev --extra rag --extra serving)
   docs/                           per-module documentation
     index.md                      system overview, layer diagram, all flow diagrams
     infra/                        6 module docs
@@ -511,10 +512,10 @@ store (a noted future improvement).
 ## Implementation status
 
 All 30 modules are implemented and tested.  Five external vector-store adapters, three
-embedder adapters, three model-hub backends, MLflow version tracking, and the NeMo
-Guardrails adapter add a further 470 tests on top of the 30-module baseline.  The test
-suite has **1129 tests passing** with `uv sync --extra dev --extra rag --extra serving`
-(0 skipped).
+embedder adapters, three model-hub backends, MLflow version tracking, the NeMo Guardrails
+adapter, and the PEFT/QLoRA trainer factory add a further 509 tests on top of the
+30-module baseline.  The test suite has **1168 tests passing** with
+`uv sync --extra dev --extra rag --extra serving` (0 skipped).
 
 | Layer | Modules | Status |
 |---|---|---|
@@ -575,8 +576,6 @@ uv run python -m llm_agents.evaluation.benchmarking --suite <name>
 
 ## Future improvements
 
-- PEFT / QLoRA fine-tuning implementation behind the `training` extra (current FineTuner
-  accepts any `trainer_factory`; a default PEFT factory is not yet shipped).
 - MLflow model registry and DVC / Delta Lake data versioning integration.
 - Implement concrete benchmark task suites (`evaluation/benchmarking/` harness is ready; suites are not yet defined); replace the current projected illustrative values with actually measured results.
 - Per-tenant budget enforcement.
@@ -594,7 +593,7 @@ Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/).
 # Install project + dev dependencies (light — no heavy ML/RAG deps)
 uv sync --extra dev --extra rag --extra serving
 
-# Run the full test suite (1129 passing)
+# Run the full test suite (1168 passing)
 uv run pytest
 
 # Run with short tracebacks and quiet output
@@ -682,7 +681,7 @@ subclassing.  The table below lists the primary imports per layer.
 | **evaluation** | `llm_agents.evaluation.framework` | `EvalHarness`, `EvalReport`, `Metric` (Protocol) | [framework](docs/evaluation/framework.md) |
 | **evaluation** | `llm_agents.evaluation.benchmarking` | `BenchmarkRunner`, `Suite`, `BenchmarkTask` | [benchmarking](docs/evaluation/benchmarking.md) |
 | **evaluation** | `llm_agents.evaluation.prompts` | `compare`, `PromptComparison`, `PromptVariant` | [prompts](docs/evaluation/prompts.md) |
-| **training** | `llm_agents.training.fine_tuning` | `FineTuner`, `FineTuneConfig`, `FineTuneResult` | [fine_tuning](docs/training/fine_tuning.md) |
+| **training** | `llm_agents.training.fine_tuning` | `FineTuner`, `FineTuneConfig`, `FineTuneResult`, `PeftTrainer`, `peft_trainer_factory` | [fine_tuning](docs/training/fine_tuning.md) |
 | **training** | `llm_agents.training.datasets` | `Dataset`, `DatasetLoader`, `from_prodigy`, `Example` | [datasets](docs/training/datasets.md) |
 | **training** | `llm_agents.training.experiment_tracking` | `Tracker` (Protocol), `NoOpTracker`, `InMemoryTracker` | [experiment_tracking](docs/training/experiment_tracking.md) |
 | **serving** | `llm_agents.serving.api` | `create_app`, `build_router`, `ChatRequest`, `RagRequest` | [api](docs/serving/api.md) |
@@ -875,40 +874,49 @@ report = judge.detect(answer="Paris is the capital.", references=references)
 print(report.groundedness_score)   # 0.85
 ```
 
-#### 6. Track a training experiment
+#### 6. Fine-tune with PEFT / QLoRA
 
 ```python
+# requires: uv sync --extra training
+from llm_agents.training.fine_tuning import FineTuneConfig, FineTuner
 from llm_agents.training.experiment_tracking import InMemoryTracker
-from llm_agents.training.datasets import DatasetLoader
-from llm_agents.training.fine_tuning import FineTuner, FineTuneConfig
 
-# In production use NoOpTracker() or a real MLflow/W&B adapter
 tracker = InMemoryTracker()
 
-dataset = DatasetLoader.from_examples([
-    {"text": "What is RAG?", "label": "1"},
-    {"text": "Unrelated question", "label": "0"},
-])
+# Standard LoRA — base model loaded in full precision
+config = FineTuneConfig(
+    base_model="meta-llama/Llama-2-7b-hf",
+    output_dir="/tmp/llama_lora",
+    num_epochs=3,
+    lora_r=16,
+    lora_alpha=32,
+    batch_size=4,
+    learning_rate=2e-4,
+)
+tuner = FineTuner(config=config, tracker=tracker)
+result = tuner.run(dataset=my_hf_dataset)   # peft_trainer_factory is the default
+print(result.model_path)    # "/tmp/llama_lora"
+print(result.metrics)       # {"train_loss": ..., "eval_loss": ...}
+print(tracker.runs)         # [{"id": "run-1", "name": "finetune-meta-llama/..."}]
+```
+
+```python
+# QLoRA — 4-bit base model (also requires: pip install bitsandbytes)
+from llm_agents.training.fine_tuning import FineTuneConfig, FineTuner
 
 config = FineTuneConfig(
-    model_name="my-base-model",
-    epochs=3,
-    learning_rate=2e-5,
-    output_dir="/tmp/fine_tuned",
+    base_model="mistralai/Mistral-7B-v0.1",
+    output_dir="/tmp/mistral_qlora",
+    use_4bit=True,                           # enable QLoRA
+    lora_r=32,
+    lora_alpha=64,
+    max_seq_length=2048,
+    fp16=True,
+    extra={"lora_target_modules": ["q_proj", "k_proj", "v_proj", "o_proj"]},
 )
-
-def my_trainer_factory(cfg, trk):
-    # return an object with .train(dataset), .save(path), .get_metrics()
-    class StubTrainer:
-        def train(self, ds): pass
-        def save(self, path): pass
-        def get_metrics(self): return {"loss": 0.25, "accuracy": 0.91}
-    return StubTrainer()
-
-tuner = FineTuner(config=config, tracker=tracker, trainer_factory=my_trainer_factory)
-result = tuner.run(dataset)
-print(result.metrics)       # {"loss": 0.25, "accuracy": 0.91}
-print(tracker.run_count)    # 1
+tuner = FineTuner(config=config)
+result = tuner.run(dataset=my_dataset)
+print(result.metrics)
 ```
 
 #### 7. Compare prompt variants

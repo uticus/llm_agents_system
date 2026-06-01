@@ -21,7 +21,12 @@ class FineTuneConfig:
         lora_dropout:  Dropout probability applied to LoRA layers.
         max_seq_length: Maximum token sequence length.
         fp16:          Use fp16 mixed-precision when ``True``.
+        use_4bit:      Load the base model in 4-bit (QLoRA) when ``True``.
+                       Requires ``bitsandbytes`` to be installed separately.
         extra:         Additional provider-specific key-value overrides.
+                       Recognised keys:
+                       ``lora_target_modules`` — list[str] of module names to
+                       apply LoRA to (passed to :class:`peft.LoraConfig`).
     """
 
     base_model: str
@@ -34,4 +39,5 @@ class FineTuneConfig:
     lora_dropout: float = 0.1
     max_seq_length: int = 512
     fp16: bool = False
+    use_4bit: bool = False
     extra: dict[str, Any] = field(default_factory=dict)

@@ -140,16 +140,9 @@ def _register_artifact(
 
 
 def _default_trainer_factory(config: FineTuneConfig, dataset: Any) -> Any:
-    """Default trainer factory: requires the ``training`` extra."""
-    try:
-        import peft  # noqa: F401
-        import transformers  # noqa: F401
-    except ImportError as exc:
-        raise ImportError(
-            "transformers and peft are required.  "
-            "Install the 'training' extra: pip install llm_agents_system[training]"
-        ) from exc
-    # Real implementation would build and return a Trainer here.
-    raise NotImplementedError(  # pragma: no cover
-        "Real trainer factory not yet implemented; pass trainer_factory= explicitly."
+    """Default trainer factory — delegates to :func:`peft_trainer_factory`."""
+    from llm_agents.training.fine_tuning._peft_trainer import (  # noqa: PLC0415
+        peft_trainer_factory,
     )
+
+    return peft_trainer_factory(config, dataset)
