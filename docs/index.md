@@ -185,7 +185,7 @@ FineTuneResult(model_path, metrics, run_id, artifact_uri)
 
 | Module | Description | Doc |
 |---|---|---|
-| embeddings | `Embedder` Protocol, `FakeEmbedder`, `BatchEmbedder` | [rag/embeddings.md](rag/embeddings.md) |
+| embeddings | `Embedder` Protocol, `FakeEmbedder`, `BatchEmbedder`, `SentenceTransformerEmbedder` (`rag` extra), `OpenAIEmbedder` (`openai` extra) | [rag/embeddings.md](rag/embeddings.md) |
 | vector_store | `VectorStore` Protocol, `InMemoryVectorStore` (cosine similarity), `FAISSVectorStore` (FAISS flat/cosine, `rag` extra), `PgVectorStore` (pgvector IVFFlat, `pgvector` extra), `WeaviateVectorStore` (Weaviate HNSW, `weaviate` extra), `ChromaVectorStore` (Chroma HNSW, `chroma` extra), `ElasticsearchVectorStore` (ES 8+ dense_vector knn, `elasticsearch` extra), `SearchResult` | [rag/vector_store.md](rag/vector_store.md) |
 | indexing | `Indexer` (chunk → MD5 dedup → batch embed → upsert), `IndexReport` | [rag/indexing.md](rag/indexing.md) |
 | retrieval | `DenseRetriever` (embed → search → filter), `RetrievedPassage` | [rag/retrieval.md](rag/retrieval.md) |
@@ -359,7 +359,8 @@ src/llm_agents/
     parsers/             ParsedDocument, DocumentParser, TextParser, ParserRegistry
     ingestion/           IngestionPipeline, IngestionReport
   rag/
-    embeddings/          Embedder, FakeEmbedder, BatchEmbedder
+    embeddings/          Embedder, FakeEmbedder, BatchEmbedder,
+                         SentenceTransformerEmbedder, OpenAIEmbedder
     vector_store/        VectorStore, InMemoryVectorStore, FAISSVectorStore,
                          PgVectorStore, WeaviateVectorStore, ChromaVectorStore,
                          ElasticsearchVectorStore, SearchResult

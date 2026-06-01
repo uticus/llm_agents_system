@@ -2,7 +2,7 @@
 
 ## Overview
 
-The embeddings module converts text strings into fixed-dimensional float vectors that encode semantic meaning. These vectors are the foundation of the entire RAG layer: without them, neither the vector store nor the retriever can operate. The module defines the `Embedder` structural protocol, a `FakeEmbedder` for deterministic testing, and a `BatchEmbedder` wrapper that transparently batches large text lists into smaller calls to any underlying embedder. Concrete model-backed implementations (sentence-transformers for local inference, OpenAI or Cohere for provider embeddings) are intended to live behind this protocol as optional-extra adapters.
+The embeddings module converts text strings into fixed-dimensional float vectors that encode semantic meaning. These vectors are the foundation of the entire RAG layer: without them, neither the vector store nor the retriever can operate. The module defines the `Embedder` structural protocol, a `FakeEmbedder` for deterministic testing, a `BatchEmbedder` wrapper that transparently batches large text lists, a `SentenceTransformerEmbedder` for local model inference (requires the `rag` extra), and an `OpenAIEmbedder` for the OpenAI embeddings API via an injected client (requires the `openai` extra).
 
 ---
 
@@ -13,6 +13,8 @@ The embeddings module converts text strings into fixed-dimensional float vectors
 | `Embedder` | Protocol | Structural interface for text embedding models. |
 | `FakeEmbedder` | class | Deterministic test embedder producing unit vectors; tracks call counts. |
 | `BatchEmbedder` | class | Wraps any `Embedder` and splits large text lists into fixed-size batches. |
+| `SentenceTransformerEmbedder` | class | Local inference via `sentence-transformers`; requires the `rag` extra. |
+| `OpenAIEmbedder` | class | OpenAI embeddings API via injected client; requires the `openai` extra. |
 
 ### `Embedder` Protocol
 
@@ -55,6 +57,55 @@ class BatchEmbedder:
 
 Raises `ValueError` if `batch_size < 1`. Results are returned in the same order as the input texts.
 
+### `SentenceTransformerEmbedder`
+
+```python
+class SentenceTransformerEmbedder:
+    def __init__(
+        self,
+        model_name: str = "all-MiniLM-L6-v2",
+        *,
+        device: str = "cpu",
+        normalize_embeddings: bool = True,
+    ) -> None: ...
+    def embed(self, texts: list[str]) -> list[list[float]]: ...
+
+    @property
+    def dimensions(self) -> int: ...  # lazy: loads model on first access
+
+    model_name:           str   # HuggingFace model identifier or local path
+    device:               str   # torch device ("cpu", "cuda", "mps")
+    normalize_embeddings: bool  # L2-normalise output vectors
+```
+
+Requires the `rag` extra (`sentence-transformers` package). The model is loaded lazily on first
+access to `dimensions` or `embed()`. `ImportError` is raised at that point if the package is not
+installed. The loaded model is cached for the lifetime of the instance.
+
+### `OpenAIEmbedder`
+
+```python
+class OpenAIEmbedder:
+    def __init__(
+        self,
+        client,
+        model: str = "text-embedding-3-small",
+        *,
+        dimensions: int | None = None,
+    ) -> None: ...
+    def embed(self, texts: list[str]) -> list[list[float]]: ...
+
+    @property
+    def dimensions(self) -> int: ...  # raises ValueError if unknown
+
+    model: str  # OpenAI model name
+```
+
+Requires an injected OpenAI-compatible client; `openai` is never imported by this module.
+`dimensions` is forwarded to the API when set (Matryoshka truncation for `text-embedding-3-*`
+models). If omitted, `dimensions` is inferred from the first response and raises `ValueError`
+if read before any `embed()` call.
+
 ---
 
 ## Architecture
@@ -71,8 +122,10 @@ Raises `ValueError` if `batch_size < 1`. Results are returned in the same order 
       v
  [ Embedder ]   <-- Protocol
       |
-      v (concrete implementations, optional extras)
- sentence-transformers / OpenAI API / Cohere API / ...
+      +---> SentenceTransformerEmbedder  (rag extra, local inference)
+      +---> OpenAIEmbedder               (openai extra, injected client)
+      +---> FakeEmbedder                 (built-in, deterministic, for tests)
+      +---> <any class with dimensions + embed()>
 ```
 
 The embedder is consumed in two places: by the `Indexer` (to embed document chunks at index time) and by the `DenseRetriever` (to embed the query at retrieval time). Both call `embed(list[str])` and receive `list[list[float]]`.
@@ -101,6 +154,10 @@ The embedder is consumed in two places: by the `Indexer` (to embed document chun
 
 **`BatchEmbedder`** is a pure wrapper that adds no semantic transformation. It exists because real embedding models impose per-request token and item count limits. Decoupling batch management from the model implementation keeps individual model adapters simple.
 
+**`SentenceTransformerEmbedder`** wraps `sentence_transformers.SentenceTransformer` with lazy model loading. The model is only instantiated on the first call to `embed()` or `dimensions`, so the module is importable without the extra installed. `dimensions` is cached after the first access. `normalize_embeddings=True` (default) ensures vectors are L2-normalised so cosine similarity equals dot product.
+
+**`OpenAIEmbedder`** takes an injected client and never imports `openai` itself. `dimensions` can be supplied at construction time (forwarded to the API for Matryoshka-style truncation on `text-embedding-3-*` models) or inferred from the first response. Accessing `dimensions` before any `embed()` call without a constructor value raises `ValueError`.
+
 ---
 
 ## Design decisions and tradeoffs
@@ -121,6 +178,14 @@ The embedder is consumed in two places: by the `Indexer` (to embed document chun
   **Why**: Dimensionality is a static property of a model, not a function of input. Making it an attribute signals this and allows type checkers and container constructors to read it without calling a method.
   **Tradeoff**: Embedders whose dimensionality depends on runtime configuration (unusual but possible) must compute it at `__init__` time and store it.
 
+- **Decision**: `SentenceTransformerEmbedder` and `OpenAIEmbedder` use deferred/injected dependencies — no imports at module level.
+  **Why**: Keeps the module importable without optional extras. Tests can mock the underlying model/client with plain MagicMock; no real network or GPU required.
+  **Tradeoff**: If the extra is not installed, errors are raised at first use, not at import time. Callers who want an early check should call `emb.dimensions` right after construction.
+
+- **Decision**: `OpenAIEmbedder` raises `ValueError` on `dimensions` access before first `embed()` when no `dimensions=` was passed.
+  **Why**: Returning a sentinel like `0` would silently mislead vector store constructors. Raising is honest about the unknown state.
+  **Tradeoff**: Code that reads `embedder.dimensions` at construction time must either pass `dimensions=` or call `embed([""])` first.
+
 ---
 
 ## Scaling concerns
@@ -135,10 +200,10 @@ The embedder is consumed in two places: by the `Indexer` (to embed document chun
 ## Future improvements
 
 - **Async embed interface**: Add an `AsyncEmbedder` protocol variant with `async def embed(...)` for provider API calls so they can be properly awaited without blocking the event loop.
-- **Sentence-transformers adapter**: Ship a `SentenceTransformerEmbedder` in the `rag` optional extra that wraps `sentence_transformers.SentenceTransformer` and exposes the standard `Embedder` protocol.
-- **Provider adapters**: Add `OpenAIEmbedder` and `CohereEmbedder` as thin wrappers behind the protocol, handling API key management, retry logic, and rate limiting.
+- **CohereEmbedder**: Add a `CohereEmbedder` adapter (client injection, same pattern as `OpenAIEmbedder`) behind a `cohere` optional extra.
 - **Dimension validation**: Add a runtime check in `Indexer` and `DenseRetriever` that the embedder's `dimensions` matches the vector store's expected dimension, raising a clear error at construction time rather than a cryptic shape mismatch later.
 - **Caching layer**: Add an optional `CachingEmbedder` wrapper that memoises vectors by text hash, avoiding redundant API calls for frequently recurring chunks.
+- **Retry + rate-limit logic**: `OpenAIEmbedder` currently makes a single API call. A production wrapper should add exponential back-off on 429/503 and respect per-minute token limits.
 
 ---
 
@@ -182,4 +247,39 @@ assert isinstance(embedder, Embedder)
 
 batched = BatchEmbedder(embedder=embedder, batch_size=8)
 assert isinstance(batched, Embedder)
+```
+
+**SentenceTransformerEmbedder (local inference):**
+
+```python
+# Requires: pip install 'llm-agents-system[rag]'
+from llm_agents.rag.embeddings import SentenceTransformerEmbedder
+
+embedder = SentenceTransformerEmbedder("all-MiniLM-L6-v2", device="cpu")
+# Model is loaded lazily on first use:
+vectors = embedder.embed(["The cat sat on the mat.", "Dogs are great."])
+print(embedder.dimensions)   # 384 for all-MiniLM-L6-v2
+print(len(vectors))          # 2
+print(len(vectors[0]))       # 384
+```
+
+**OpenAIEmbedder (provider API):**
+
+```python
+# Requires: pip install 'llm-agents-system[openai]'
+import openai
+from llm_agents.rag.embeddings import OpenAIEmbedder
+
+client = openai.OpenAI()   # reads OPENAI_API_KEY from environment
+
+# Pass dimensions= to use Matryoshka truncation (text-embedding-3-* only):
+embedder = OpenAIEmbedder(client, model="text-embedding-3-small", dimensions=512)
+vectors = embedder.embed(["Hello, world!", "Another document."])
+print(embedder.dimensions)   # 512
+print(len(vectors[0]))       # 512
+
+# Without dimensions=, it is inferred from the first response:
+embedder2 = OpenAIEmbedder(client)
+vectors2 = embedder2.embed(["test"])
+print(embedder2.dimensions)  # 1536 (text-embedding-3-small default)
 ```

@@ -58,6 +58,10 @@ chroma = [
 elasticsearch = [
     "elasticsearch>=8.0",
 ]
+# OpenAI embeddings API adapter.
+openai = [
+    "openai>=1.0",
+]
 # Data connectors and document parsers for ingestion.
 data = [
     "psycopg[binary]>=3.2",
