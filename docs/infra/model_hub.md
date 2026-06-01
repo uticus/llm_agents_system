@@ -4,7 +4,7 @@ Module path: `src/llm_agents/infra/model_hub/`
 
 ## Overview
 
-The model hub module provides a uniform interface for loading and managing model backends across a variety of providers: the OpenAI API, HuggingFace transformers, local GGUF quantized models via llama.cpp, and vLLM-served local models. It defines a structural `ModelBackend` Protocol that any adapter must satisfy, a `ModelHub` registry that maps string names to registered backend instances, and four concrete adapter classes: `OpenAIBackend`, `HuggingFaceBackend`, `LlamaCppBackend`, and `VLLMBackend`. The module is designed for a hybrid inference scenario where some requests go to a cloud API (low operational overhead, higher cost) and others go to locally hosted models (higher operational complexity, zero per-token cost). By hiding backend details behind a single `generate(prompt, max_tokens, temperature) -> str` interface, orchestrators and agents can switch between providers through configuration alone, without changing application code.
+The model hub module provides a uniform interface for loading, managing, and version-tracking model backends across a variety of providers: the OpenAI API, HuggingFace transformers, local GGUF quantized models via llama.cpp, and vLLM-served local models. It defines a structural `ModelBackend` Protocol that any adapter must satisfy, a `ModelHub` registry that maps string names to registered backend instances, four concrete adapter classes (`OpenAIBackend`, `HuggingFaceBackend`, `LlamaCppBackend`, `VLLMBackend`), and an `MLflowVersionLogger` that records checkpoint registrations and rollbacks as MLflow runs. The module is designed for a hybrid inference scenario where some requests go to a cloud API (low operational overhead, higher cost) and others go to locally hosted models (higher operational complexity, zero per-token cost). By hiding backend details behind a single `generate(prompt, max_tokens, temperature) -> str` interface, orchestrators and agents can switch between providers through configuration alone, without changing application code.
 
 ---
 
@@ -18,11 +18,12 @@ Import everything from `llm_agents.infra.model_hub`.
 |---|---|---|
 | `ModelBackend` | Protocol | Structural interface that every backend must satisfy. |
 | `FakeBackend` | class | Deterministic test stub that cycles through preset responses. |
-| `ModelHub` | class | Registry mapping backend names to `ModelBackend` instances. |
+| `ModelHub` | class | Registry mapping backend names to `ModelBackend` instances; optional version tracking. |
 | `OpenAIBackend` | class | Async adapter for the OpenAI Chat Completions API. |
 | `HuggingFaceBackend` | class | Local inference via `transformers.pipeline`; requires `training` extra. |
 | `LlamaCppBackend` | class | GGUF model inference via `llama-cpp-python`; requires `local-inference` extra. |
 | `VLLMBackend` | class | High-throughput local inference via `vllm`; requires `local-inference` extra (Linux/CUDA). |
+| `MLflowVersionLogger` | class | Logs `register_version` and `rollback` events to MLflow; requires `training` extra. |
 
 ### `ModelBackend` (Protocol)
 
@@ -63,15 +64,34 @@ Requires at least one response string; raises `ValueError` if `responses` is emp
 
 ```python
 class ModelHub
-    def __init__(self, backends: dict[str, Any] | None = None) -> None
+    def __init__(
+        self,
+        backends: dict[str, Any] | None = None,
+        *,
+        version_logger: Any | None = None,
+    ) -> None
 ```
+
+The `version_logger` parameter is optional; pass an `MLflowVersionLogger` instance to enable MLflow logging.
+
+**Core methods**
 
 | Method | Signature | Description |
 |---|---|---|
-| `register` | `(backend: ModelBackend) -> None` | Register `backend` under its `name`. Overwrites any existing backend with the same name. |
-| `get` | `(name: str) -> ModelBackend \| None` | Return the backend for `name`, or `None` if not registered. |
+| `register` | `(backend: ModelBackend) -> None` | Register `backend` under its `name`. Overwrites any existing backend with the same name. Does not record a version. |
+| `get` | `(name: str) -> ModelBackend \| None` | Return the active backend for `name`, or `None`. When version tracking is active, this always returns the currently active version. |
 | `list_names` | `() -> list[str]` | Return all registered names in alphabetical order. |
 | `__len__` | `() -> int` | Return the number of registered backends. |
+
+**Versioning methods**
+
+| Method | Signature | Description |
+|---|---|---|
+| `register_version` | `(backend: ModelBackend, version: str, *, tags: dict[str, str] \| None = None) -> None` | Register `backend` under its `name` **and** an explicit `version` string. The registered version becomes the active version. Forwards a log event to the `version_logger` (if any). |
+| `get_version` | `(name: str, version: str) -> ModelBackend \| None` | Return the checkpoint stored under `name` + `version`, without changing the active version. |
+| `list_versions` | `(name: str) -> list[str]` | Return the version strings for `name` in registration order. Returns `[]` if `name` has no versioned checkpoints. |
+| `active_version` | `(name: str) -> str \| None` | Return the currently active version for `name`, or `None` if `name` was registered without versioning. |
+| `rollback` | `(name: str, version: str) -> bool` | Set the active backend to the checkpoint at `version`. Returns `True` on success, `False` if `name` or `version` is unknown. Forwards a log event to the `version_logger` (if any). |
 
 ### `OpenAIBackend`
 
@@ -148,6 +168,26 @@ class VLLMBackend
 
 Wraps `vllm.LLM` + `vllm.SamplingParams`. The engine is loaded lazily. `import vllm` is deferred in both `_get_llm()` and `generate()`. Inference runs in a thread-pool executor (vLLM's `generate` is synchronous). Requires Linux with a CUDA GPU.
 
+### `MLflowVersionLogger`
+
+```python
+class MLflowVersionLogger
+    def __init__(
+        self,
+        tracking_uri: str | None = None,
+        experiment_name: str = "model_hub",
+    ) -> None
+```
+
+Optional side-effect logger passed to `ModelHub(version_logger=...)`. Every `register_version` and `rollback` event on the hub triggers a corresponding MLflow run. `import mlflow` is deferred — the class is instantiable without `mlflow` installed. Requires the `training` extra.
+
+| Method | Signature | Description |
+|---|---|---|
+| `on_register` | `(name: str, version: str, metadata: dict, tags: dict \| None) -> None` | Opens an MLflow run named `"register-{name}-{version}"`. Logs `model_name`, `version`, `action="register"`, all metadata keys as `meta.<key>` params, and tag key/value pairs. |
+| `on_rollback` | `(name: str, from_version: str \| None, to_version: str) -> None` | Opens an MLflow run named `"rollback-{name}"`. Logs `model_name`, `from_version` (or `"unversioned"` if `None`), `to_version`, `action="rollback"`. |
+
+`tracking_uri` defaults to the MLflow environment default when `None`. `experiment_name` defaults to `"model_hub"`.
+
 ---
 
 ## Architecture
@@ -157,7 +197,7 @@ Wraps `vllm.LLM` + `vllm.SamplingParams`. The engine is loaded lazily. `import v
 ```
 Application / Agent
     |
-    | hub.get("gpt-4o")
+    | hub.get("gpt-4o")          # returns active version of "gpt-4o"
     v
 ModelHub (dict: name -> ModelBackend)
     |
@@ -166,6 +206,15 @@ ModelHub (dict: name -> ModelBackend)
     +-- "llama-gguf"      -> LlamaCppBackend     (local-inference extra, GGUF file)
     +-- "llama-vllm"      -> VLLMBackend         (local-inference extra, Linux/CUDA)
     +-- "test-model"      -> FakeBackend         (built-in, deterministic)
+    |
+    | version tracking (opt-in)
+    v
+    _version_map: {"mistral-hf": {"v1": backend_v1, "v2": backend_v2}}
+    _active_versions: {"mistral-hf": "v2"}
+    |
+    | side-effect logging (opt-in)
+    v
+MLflowVersionLogger -> MLflow tracking server
 
 Each backend implements:
     .name: str
@@ -175,20 +224,21 @@ Each backend implements:
 
 ### Data flow
 
-1. At startup, the application instantiates a `ModelHub` and calls `hub.register(backend)` for each backend it wants to make available.
-2. When an agent or orchestrator needs to generate text, it calls `hub.get("backend-name")` to retrieve the backend instance.
+1. At startup, the application instantiates a `ModelHub` (optionally with a `version_logger`) and calls `hub.register(backend)` or `hub.register_version(backend, "v1")` for each backend.
+2. When an agent or orchestrator needs to generate text, it calls `hub.get("backend-name")` to retrieve the active backend instance.
 3. It calls `await backend.generate(prompt, max_tokens=256, temperature=0.0)` and receives the generated string.
 4. For **OpenAI**: `generate` creates an `AsyncOpenAI` client, calls `client.chat.completions.create(...)`, and extracts `choices[0].message.content`.
 5. For **HuggingFace**: `generate` retrieves the lazily-loaded pipeline and dispatches `pipe(prompt, ...)` to the thread-pool executor.
 6. For **LlamaCpp**: `generate` retrieves the lazily-loaded `Llama` model and dispatches `model(prompt, ...)` to the thread-pool executor; extracts `choices[0]["text"]`.
 7. For **vLLM**: `generate` builds `SamplingParams`, dispatches `llm.generate([prompt], sampling_params)` to the thread-pool executor, and extracts `outputs[0].outputs[0].text`.
 8. For **FakeBackend**: `generate` returns the next preset response string (cycling), incrementing `call_count`.
+9. For **versioned rollback**: calling `hub.rollback("backend-name", "v1")` swaps the active backend to the checkpoint stored at `"v1"`, notifies the `version_logger`, and returns `True`. Subsequent `hub.get("backend-name")` returns that checkpoint.
 
 ### Key abstractions
 
 **`ModelBackend` Protocol:** Structural typing (duck typing enforced at type-check time) removes the need for every adapter to import from this module. A HuggingFace adapter, a vLLM adapter, or a llama.cpp adapter can each be written independently and registered without a common base class. `runtime_checkable` enables `isinstance` guards where needed (e.g., in the hub's `register` method type checking or in tests).
 
-**`ModelHub` registry:** A simple `dict[str, ModelBackend]` wrapped in a class. The class exists to provide a named API (`register`, `get`, `list_names`, `__len__`) rather than raw dict access, which makes the registry's intent clear and allows future extensions (e.g., lazy loading, health checks) without changing the interface.
+**`ModelHub` registry and versioning:** A `dict[str, ModelBackend]` wrapped in a class. The flat `_backends` dict holds the currently active backend per name. When version tracking is used, `_version_map[name][version]` holds every registered checkpoint and `_active_versions[name]` records which version is currently active. `register_version` updates all three structures; `rollback` swaps `_backends[name]` to a previously stored checkpoint without altering the history.
 
 **`OpenAIBackend` deferred import:** Deferring `import openai` to `generate()` means that importing `llm_agents.infra.model_hub` in a test environment that lacks the `openai` package does not fail at module load time. The `ImportError` only surfaces when `generate()` is actually called, and the error message directs the user to install the correct optional extra.
 
@@ -208,7 +258,11 @@ Each backend implements:
 
 - **Decision:** `generate` takes a single `prompt: str` rather than `messages: list[dict]`. **Why:** The hub targets a lower-level interface than the routing layer. Some local backends (llama.cpp, vLLM serving raw completions) do not natively support the chat message format. **Tradeoff:** Chat-format features (system prompts, multi-turn history) must be serialized to a string by the caller before calling `generate`. The `inference_routing` layer sits above the hub and handles chat-format natively via `LLMRequest.messages`.
 
-- **Decision:** `ModelHub` overwrites on re-registration. **Why:** Simplifies live model replacement (e.g., swapping a model checkpoint during development) without a separate `unregister` API. **Tradeoff:** Silent overwrites can mask bugs where the same name is registered twice with different backends due to a configuration error. There is no warning or error on overwrite.
+- **Decision:** `ModelHub` plain `register()` overwrites on re-registration. **Why:** Simplifies live model replacement (e.g., swapping a model checkpoint during development) without a separate `unregister` API. **Tradeoff:** Silent overwrites can mask bugs where the same name is registered twice with different backends due to a configuration error. Callers that need an audit trail should use `register_version` instead.
+
+- **Decision:** Versioning is opt-in via `register_version`; plain `register` is unaffected. **Why:** Most existing callers do not need versioning and should not be required to provide a version string. Adding a `version_logger` keyword argument (default `None`) and separate `register_version` / `rollback` methods means zero impact on existing code. **Tradeoff:** Two registration methods with slightly different semantics could confuse new contributors; addressed by the docstrings which explain the distinction clearly.
+
+- **Decision:** `MLflowVersionLogger` is a separate class rather than being built into `ModelHub`. **Why:** Keeps `ModelHub` free of MLflow imports and allows different loggers (e.g., WandB, a custom HTTP logger) to be dropped in without modifying the hub. The logger is injected via the constructor rather than a global registry. **Tradeoff:** Callers must instantiate the logger explicitly; there is no "enable logging" boolean shorthand.
 
 - **Decision:** `OpenAIBackend` creates a new `AsyncOpenAI` client on every `generate()` call. **Why:** Avoids holding a client object in memory for the entire process lifetime, and avoids connection pool management at this level. **Tradeoff:** Per-call client instantiation adds overhead. In high-throughput scenarios, the client should be created once and reused. A future improvement would be to cache the client as an instance attribute.
 
@@ -226,7 +280,7 @@ Each backend implements:
 
 - **`list_names` sort on every call:** `list_names()` calls `sorted(self._backends)` every time. With a large number of registered backends, this is a O(n log n) operation on every call. The sorted list could be maintained incrementally.
 
-- **No versioning:** Backend registration has no version field. If multiple checkpoint versions of the same model need to coexist (e.g., for A/B testing), they must be registered under distinct names.
+- **Version history grows unbounded:** Each call to `register_version` appends a checkpoint to `_version_map[name]`. There is no eviction or maximum-history limit, so a hub that registers many checkpoints over a long process lifetime will hold them all in memory.
 
 ---
 
@@ -240,7 +294,9 @@ Each backend implements:
 
 - **Cached `AsyncOpenAI` client in `OpenAIBackend`:** Store the `AsyncOpenAI` client as an instance attribute, created once on first `generate()` call and reused thereafter, to avoid per-call session setup overhead.
 
-- **MLflow version tracking:** Add a `version: str | None` field to `ModelHub` backend entries and a `register_versioned(backend, version)` method, backed by an MLflow run ID, so that model checkpoints can be tracked and rolled back.
+- **Version history eviction:** Add a `max_versions: int | None` parameter to `ModelHub` so that old checkpoints are dropped when the history exceeds a configurable limit, bounding memory growth.
+
+- **Alternative version loggers:** Provide a `WandbVersionLogger` and a `NullVersionLogger` as companion classes. `NullVersionLogger` would be useful as a no-op in tests that need a logger object but do not want side-effects.
 
 ---
 
@@ -359,4 +415,55 @@ hub.register(VLLMBackend(
 
 result = await hub.get("mistral-vllm").generate("Explain quantum entanglement briefly.")
 print(result)
+```
+
+### Version tracking with MLflow logging
+
+```python
+# Requires: pip install 'llm-agents-system[training]'
+from llm_agents.infra.model_hub import ModelHub, FakeBackend, MLflowVersionLogger
+
+# Create a logger that writes to a local MLflow server
+logger = MLflowVersionLogger(
+    tracking_uri="http://localhost:5000",
+    experiment_name="model_checkpoints",
+)
+hub = ModelHub(version_logger=logger)
+
+# Register two checkpoint versions of the same model
+v1_backend = FakeBackend("mistral", ["v1 response"])
+v2_backend = FakeBackend("mistral", ["v2 response"])
+
+hub.register_version(v1_backend, "v1", tags={"stage": "baseline"})
+hub.register_version(v2_backend, "v2", tags={"stage": "candidate"})
+
+print(hub.active_version("mistral"))  # "v2"
+print(hub.list_versions("mistral"))   # ["v1", "v2"]
+
+result = await hub.get("mistral").generate("prompt")
+print(result)  # "v2 response"
+
+# Roll back to v1
+hub.rollback("mistral", "v1")
+print(hub.active_version("mistral"))  # "v1"
+result = await hub.get("mistral").generate("prompt")
+print(result)  # "v1 response"
+
+# Retrieve a specific checkpoint without changing active version
+checkpoint = hub.get_version("mistral", "v2")
+```
+
+### Version tracking without MLflow (no logger)
+
+```python
+from llm_agents.infra.model_hub import ModelHub, FakeBackend
+
+# Versioning works without a logger — no MLflow side-effects
+hub = ModelHub()
+hub.register_version(FakeBackend("m", ["r1"]), "2024-01-01")
+hub.register_version(FakeBackend("m", ["r2"]), "2024-06-01")
+
+assert hub.active_version("m") == "2024-06-01"
+assert hub.rollback("m", "2024-01-01") is True
+assert hub.active_version("m") == "2024-01-01"
 ```

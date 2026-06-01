@@ -291,7 +291,7 @@ FineTuneResult(model_path, metrics, run_id, artifact_uri)
 
 | Subsystem | Package | Responsibility | Doc |
 |---|---|---|---|
-| Model hub | `infra/model_hub/` | Load/version models across OpenAI, HuggingFace, GGUF (llama.cpp/vLLM) | [model_hub](docs/infra/model_hub.md) |
+| Model hub | `infra/model_hub/` | Load/version models across OpenAI, HuggingFace, GGUF (llama.cpp/vLLM); versioned checkpoint registration and rollback via `MLflowVersionLogger` | [model_hub](docs/infra/model_hub.md) |
 | Inference routing | `infra/inference_routing/` | Route across providers/models by policy; retry + fallback | [inference_routing](docs/infra/inference_routing.md) |
 | Cost/latency optimization | `infra/cost_latency_optimization/` | LRU cache, async batcher, budget tracker | [cost_latency_optimization](docs/infra/cost_latency_optimization.md) |
 | Guardrails | `infra/guardrails/` | Keyword / embedding filter chain; tone/compliance enforcement | [guardrails](docs/infra/guardrails.md) |
@@ -363,7 +363,8 @@ llm_agents_system/
       inference_routing/          Router, RoutingPolicy, Candidate
       cost_latency_optimization/  CompletionCache, Batcher, BudgetTracker
       model_hub/                  ModelHub, ModelBackend (Protocol), OpenAIBackend,
-                                  HuggingFaceBackend, LlamaCppBackend, VLLMBackend
+                                  HuggingFaceBackend, LlamaCppBackend, VLLMBackend,
+                                  MLflowVersionLogger
       guardrails/                 GuardrailChain, KeywordFilter, EmbeddingFilter
     data/
       connectors/                 Document, Connector (Protocol), FakeConnector
@@ -399,7 +400,7 @@ llm_agents_system/
       benchmarking/               BenchmarkTask, Suite, BenchmarkRunner, BenchmarkReport
       hallucination/              HallucinationReport, HallucinationDetector (Protocol), OverlapDetector, LLMJudgeDetector
     config.py                     typed runtime settings (env + configs/)
-  tests/unit/                     mirrors src/ — one test file per module (1042 passing with --extra dev --extra rag --extra serving)
+  tests/unit/                     mirrors src/ — one test file per module (1102 passing with --extra dev --extra rag --extra serving)
   docs/                           per-module documentation
     index.md                      system overview, layer diagram, all flow diagrams
     infra/                        6 module docs
@@ -510,8 +511,8 @@ store (a noted future improvement).
 ## Implementation status
 
 All 30 modules are implemented and tested.  Five external vector-store adapters, three
-embedder adapters, and three model-hub backends add a further 383 tests on top of the
-30-module baseline.  The test suite has **1042 tests passing** with
+embedder adapters, three model-hub backends, and MLflow version tracking add a further 443
+tests on top of the 30-module baseline.  The test suite has **1102 tests passing** with
 `uv sync --extra dev --extra rag --extra serving` (0 skipped).
 
 | Layer | Modules | Status |
@@ -573,7 +574,6 @@ uv run python -m llm_agents.evaluation.benchmarking --suite <name>
 
 ## Future improvements
 
-- MLflow version tracking integration in `ModelHub` (register versioned checkpoints, roll back).
 - NeMo Guardrails adapter behind `guardrails`.
 - PEFT / QLoRA fine-tuning implementation behind the `training` extra (current FineTuner
   accepts any `trainer_factory`; a default PEFT factory is not yet shipped).
@@ -594,7 +594,7 @@ Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/).
 # Install project + dev dependencies (light — no heavy ML/RAG deps)
 uv sync --extra dev --extra rag --extra serving
 
-# Run the full test suite (1042 passing)
+# Run the full test suite (1102 passing)
 uv run pytest
 
 # Run with short tracebacks and quiet output
@@ -674,7 +674,7 @@ subclassing.  The table below lists the primary imports per layer.
 | **infra** | `llm_agents.infra.tracing` | `Tracer`, `Span`, `FinishedSpan`, `InMemoryCollector` | [tracing](docs/infra/tracing.md) |
 | **infra** | `llm_agents.infra.observability` | `MetricsRegistry`, `JSONFormatter`, `bridge_span` | [observability](docs/infra/observability.md) |
 | **infra** | `llm_agents.infra.inference_routing` | `Router`, `RoutingPolicy`, `Candidate` | [inference_routing](docs/infra/inference_routing.md) |
-| **infra** | `llm_agents.infra.model_hub` | `ModelHub`, `ModelBackend` (Protocol), `OpenAIBackend`, `HuggingFaceBackend`, `LlamaCppBackend`, `VLLMBackend` | [model_hub](docs/infra/model_hub.md) |
+| **infra** | `llm_agents.infra.model_hub` | `ModelHub`, `ModelBackend` (Protocol), `OpenAIBackend`, `HuggingFaceBackend`, `LlamaCppBackend`, `VLLMBackend`, `MLflowVersionLogger` | [model_hub](docs/infra/model_hub.md) |
 | **infra** | `llm_agents.infra.guardrails` | `GuardrailChain`, `KeywordFilter`, `EmbeddingFilter` | [guardrails](docs/infra/guardrails.md) |
 | **infra** | `llm_agents.infra.cost_latency_optimization` | `CompletionCache`, `Batcher`, `BudgetTracker` | [cost_latency_optimization](docs/infra/cost_latency_optimization.md) |
 | **evaluation** | `llm_agents.evaluation.hallucination` | `OverlapDetector`, `LLMJudgeDetector`, `HallucinationReport` | [hallucination](docs/evaluation/hallucination.md) |

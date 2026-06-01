@@ -158,7 +158,7 @@ FineTuneResult(model_path, metrics, run_id, artifact_uri)
 | observability | Prometheus metrics, JSON structured logging, span bridge | [infra/observability.md](infra/observability.md) |
 | inference_routing | Multi-backend retry + fallback, `RoutingPolicy`, span instrumentation | [infra/inference_routing.md](infra/inference_routing.md) |
 | cost_latency_optimization | LRU completion cache, async request batcher, budget tracker | [infra/cost_latency_optimization.md](infra/cost_latency_optimization.md) |
-| model_hub | Backend registry, `ModelBackend` Protocol, `OpenAIBackend`, `HuggingFaceBackend`, `LlamaCppBackend`, `VLLMBackend`, `FakeBackend` | [infra/model_hub.md](infra/model_hub.md) |
+| model_hub | Backend registry, `ModelBackend` Protocol, `OpenAIBackend`, `HuggingFaceBackend`, `LlamaCppBackend`, `VLLMBackend`, `FakeBackend`; versioned checkpoint registration and rollback via `MLflowVersionLogger` | [infra/model_hub.md](infra/model_hub.md) |
 | guardrails | Keyword / embedding / LLM filter chain, `GuardrailResult` | [infra/guardrails.md](infra/guardrails.md) |
 
 ### core — agent capabilities
@@ -345,7 +345,8 @@ src/llm_agents/
     inference_routing/   Router, RoutingPolicy, Candidate
     cost_latency_optimization/  CompletionCache, Batcher, BudgetTracker
     model_hub/           ModelHub, OpenAIBackend, HuggingFaceBackend,
-                         LlamaCppBackend, VLLMBackend, FakeBackend
+                         LlamaCppBackend, VLLMBackend, FakeBackend,
+                         MLflowVersionLogger
     guardrails/          GuardrailChain, KeywordFilter, EmbeddingFilter
   core/
     agent_memory/        Memory, MemoryEntry, ShortTermMemory, LongTermMemory
