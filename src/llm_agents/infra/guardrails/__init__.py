@@ -1,7 +1,7 @@
 """Guardrails: constrain outputs to compliant domains and enforce tone.
 
-Lightweight regex/embedding filters by default, with an optional NVIDIA NeMo Guardrails
-adapter behind an interface.
+Lightweight regex/embedding filters by default, with an optional NVIDIA NeMo
+Guardrails adapter behind the ``nemo`` extra.
 
 Public surface
 --------------
@@ -14,6 +14,10 @@ Protocol and built-in guards::
     from llm_agents.infra.guardrails import (
         Guard, RegexFilter, KeywordFilter, RedactFilter, EmbeddingFilter
     )
+
+NeMo Guardrails adapter (requires ``nemo`` extra — deferred import)::
+
+    from llm_agents.infra.guardrails import NeMoGuard
 
 Chain::
 
@@ -40,6 +44,7 @@ from llm_agents.infra.guardrails._guards import (
     RegexFilter,
 )
 from llm_agents.infra.guardrails._models import GuardAction, GuardResult
+from llm_agents.infra.guardrails._nemo_guard import NeMoGuard
 
 __all__ = [
     "EmbeddingFilter",
@@ -48,6 +53,7 @@ __all__ = [
     "GuardResult",
     "GuardrailChain",
     "KeywordFilter",
+    "NeMoGuard",
     "RedactFilter",
     "RegexFilter",
 ]

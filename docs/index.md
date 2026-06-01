@@ -159,7 +159,7 @@ FineTuneResult(model_path, metrics, run_id, artifact_uri)
 | inference_routing | Multi-backend retry + fallback, `RoutingPolicy`, span instrumentation | [infra/inference_routing.md](infra/inference_routing.md) |
 | cost_latency_optimization | LRU completion cache, async request batcher, budget tracker | [infra/cost_latency_optimization.md](infra/cost_latency_optimization.md) |
 | model_hub | Backend registry, `ModelBackend` Protocol, `OpenAIBackend`, `HuggingFaceBackend`, `LlamaCppBackend`, `VLLMBackend`, `FakeBackend`; versioned checkpoint registration and rollback via `MLflowVersionLogger` | [infra/model_hub.md](infra/model_hub.md) |
-| guardrails | Keyword / embedding / LLM filter chain, `GuardrailResult` | [infra/guardrails.md](infra/guardrails.md) |
+| guardrails | Keyword / embedding / LLM filter chain, `GuardResult`; `NeMoGuard` adapter for NVIDIA NeMo Guardrails | [infra/guardrails.md](infra/guardrails.md) |
 
 ### core — agent capabilities
 
@@ -347,7 +347,8 @@ src/llm_agents/
     model_hub/           ModelHub, OpenAIBackend, HuggingFaceBackend,
                          LlamaCppBackend, VLLMBackend, FakeBackend,
                          MLflowVersionLogger
-    guardrails/          GuardrailChain, KeywordFilter, EmbeddingFilter
+    guardrails/          GuardrailChain, KeywordFilter, EmbeddingFilter,
+                         NeMoGuard
   core/
     agent_memory/        Memory, MemoryEntry, ShortTermMemory, LongTermMemory
     long_context/        ContextManager, SlidingWindowStrategy, SummaryStrategy

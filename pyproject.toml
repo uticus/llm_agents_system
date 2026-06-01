@@ -66,6 +66,10 @@ openai = [
 cohere = [
     "cohere>=5.0",
 ]
+# NVIDIA NeMo Guardrails adapter.
+nemo = [
+    "nemoguardrails>=0.9",
+]
 # Data connectors and document parsers for ingestion.
 data = [
     "psycopg[binary]>=3.2",

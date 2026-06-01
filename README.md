@@ -294,7 +294,7 @@ FineTuneResult(model_path, metrics, run_id, artifact_uri)
 | Model hub | `infra/model_hub/` | Load/version models across OpenAI, HuggingFace, GGUF (llama.cpp/vLLM); versioned checkpoint registration and rollback via `MLflowVersionLogger` | [model_hub](docs/infra/model_hub.md) |
 | Inference routing | `infra/inference_routing/` | Route across providers/models by policy; retry + fallback | [inference_routing](docs/infra/inference_routing.md) |
 | Cost/latency optimization | `infra/cost_latency_optimization/` | LRU cache, async batcher, budget tracker | [cost_latency_optimization](docs/infra/cost_latency_optimization.md) |
-| Guardrails | `infra/guardrails/` | Keyword / embedding filter chain; tone/compliance enforcement | [guardrails](docs/infra/guardrails.md) |
+| Guardrails | `infra/guardrails/` | Keyword / embedding filter chain; `NeMoGuard` adapter for NVIDIA NeMo Guardrails | [guardrails](docs/infra/guardrails.md) |
 | Tracing | `infra/tracing/` | Async-safe spans across agent, tool, and LLM calls | [tracing](docs/infra/tracing.md) |
 | Observability | `infra/observability/` | Prometheus metrics, JSON structured logging, span bridge | [observability](docs/infra/observability.md) |
 
@@ -365,7 +365,7 @@ llm_agents_system/
       model_hub/                  ModelHub, ModelBackend (Protocol), OpenAIBackend,
                                   HuggingFaceBackend, LlamaCppBackend, VLLMBackend,
                                   MLflowVersionLogger
-      guardrails/                 GuardrailChain, KeywordFilter, EmbeddingFilter
+      guardrails/                 GuardrailChain, KeywordFilter, EmbeddingFilter, NeMoGuard
     data/
       connectors/                 Document, Connector (Protocol), FakeConnector
       parsers/                    ParsedDocument, DocumentParser (Protocol), TextParser, ParserRegistry
@@ -400,7 +400,7 @@ llm_agents_system/
       benchmarking/               BenchmarkTask, Suite, BenchmarkRunner, BenchmarkReport
       hallucination/              HallucinationReport, HallucinationDetector (Protocol), OverlapDetector, LLMJudgeDetector
     config.py                     typed runtime settings (env + configs/)
-  tests/unit/                     mirrors src/ — one test file per module (1102 passing with --extra dev --extra rag --extra serving)
+  tests/unit/                     mirrors src/ — one test file per module (1129 passing with --extra dev --extra rag --extra serving)
   docs/                           per-module documentation
     index.md                      system overview, layer diagram, all flow diagrams
     infra/                        6 module docs
@@ -511,9 +511,10 @@ store (a noted future improvement).
 ## Implementation status
 
 All 30 modules are implemented and tested.  Five external vector-store adapters, three
-embedder adapters, three model-hub backends, and MLflow version tracking add a further 443
-tests on top of the 30-module baseline.  The test suite has **1102 tests passing** with
-`uv sync --extra dev --extra rag --extra serving` (0 skipped).
+embedder adapters, three model-hub backends, MLflow version tracking, and the NeMo
+Guardrails adapter add a further 470 tests on top of the 30-module baseline.  The test
+suite has **1129 tests passing** with `uv sync --extra dev --extra rag --extra serving`
+(0 skipped).
 
 | Layer | Modules | Status |
 |---|---|---|
@@ -574,7 +575,6 @@ uv run python -m llm_agents.evaluation.benchmarking --suite <name>
 
 ## Future improvements
 
-- NeMo Guardrails adapter behind `guardrails`.
 - PEFT / QLoRA fine-tuning implementation behind the `training` extra (current FineTuner
   accepts any `trainer_factory`; a default PEFT factory is not yet shipped).
 - MLflow model registry and DVC / Delta Lake data versioning integration.
@@ -594,7 +594,7 @@ Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/).
 # Install project + dev dependencies (light — no heavy ML/RAG deps)
 uv sync --extra dev --extra rag --extra serving
 
-# Run the full test suite (1102 passing)
+# Run the full test suite (1129 passing)
 uv run pytest
 
 # Run with short tracebacks and quiet output
@@ -625,6 +625,7 @@ uv sync --extra openai            # OpenAI embeddings API adapter (openai>=1.0)
 uv sync --extra cohere            # Cohere embeddings API adapter (cohere>=5.0)
 uv sync --extra local-inference   # llama.cpp / vLLM local model backends
 uv sync --extra training          # transformers + PEFT + MLflow fine-tuning
+uv sync --extra nemo              # NVIDIA NeMo Guardrails adapter
 uv sync --extra serving           # FastAPI + uvicorn
 uv sync --extra data              # PostgreSQL, Confluence/Jira, PDF/DOCX connectors/parsers
 uv sync --extra tracking          # Weights & Biases + DVC
@@ -675,7 +676,7 @@ subclassing.  The table below lists the primary imports per layer.
 | **infra** | `llm_agents.infra.observability` | `MetricsRegistry`, `JSONFormatter`, `bridge_span` | [observability](docs/infra/observability.md) |
 | **infra** | `llm_agents.infra.inference_routing` | `Router`, `RoutingPolicy`, `Candidate` | [inference_routing](docs/infra/inference_routing.md) |
 | **infra** | `llm_agents.infra.model_hub` | `ModelHub`, `ModelBackend` (Protocol), `OpenAIBackend`, `HuggingFaceBackend`, `LlamaCppBackend`, `VLLMBackend`, `MLflowVersionLogger` | [model_hub](docs/infra/model_hub.md) |
-| **infra** | `llm_agents.infra.guardrails` | `GuardrailChain`, `KeywordFilter`, `EmbeddingFilter` | [guardrails](docs/infra/guardrails.md) |
+| **infra** | `llm_agents.infra.guardrails` | `GuardrailChain`, `KeywordFilter`, `EmbeddingFilter`, `NeMoGuard` | [guardrails](docs/infra/guardrails.md) |
 | **infra** | `llm_agents.infra.cost_latency_optimization` | `CompletionCache`, `Batcher`, `BudgetTracker` | [cost_latency_optimization](docs/infra/cost_latency_optimization.md) |
 | **evaluation** | `llm_agents.evaluation.hallucination` | `OverlapDetector`, `LLMJudgeDetector`, `HallucinationReport` | [hallucination](docs/evaluation/hallucination.md) |
 | **evaluation** | `llm_agents.evaluation.framework` | `EvalHarness`, `EvalReport`, `Metric` (Protocol) | [framework](docs/evaluation/framework.md) |
@@ -803,10 +804,12 @@ print(f"fetched={report.fetched} upserted={report.upserted} skipped={report.skip
 #### 4. Run guardrails on LLM output
 
 ```python
-from llm_agents.infra.guardrails import GuardrailChain, KeywordFilter, EmbeddingFilter
+from llm_agents.infra.guardrails import (
+    GuardrailChain, KeywordFilter, EmbeddingFilter, RegexFilter, GuardAction,
+)
 
 # Block outputs containing banned terms
-keyword_filter = KeywordFilter(blocked=["confidential", "password", "secret"])
+keyword_filter = KeywordFilter(["confidential", "password", "secret"])
 
 # Block off-topic outputs using a cosine scorer (plug in a real embedder here)
 def scorer(text: str) -> float:
@@ -815,14 +818,32 @@ def scorer(text: str) -> float:
 
 embedding_filter = EmbeddingFilter(scorer=scorer, threshold=0.7)
 
-chain = GuardrailChain(filters=[keyword_filter, embedding_filter])
+chain = GuardrailChain([keyword_filter, embedding_filter])
 
 result = chain.run("The password is hunter2")
-print(result.action)   # "block"
-print(result.reason)   # explains which filter triggered
+print(result.action)            # "block"
+print(result.violation_detail)  # "Blocked keyword found: 'password'"
 
 result = chain.run("Paris is the capital of France.")
-print(result.action)   # "pass"
+print(result.passed)   # True
+```
+
+```python
+# NeMo Guardrails policy check (requires: uv sync --extra nemo)
+from llm_agents.infra.guardrails import NeMoGuard, GuardrailChain, KeywordFilter
+
+# Cheap guard first, NeMo (LLM call) only if keyword check passes
+chain = GuardrailChain([
+    KeywordFilter(["jailbreak", "ignore previous instructions"]),
+    NeMoGuard(
+        "/configs/nemo_guardrails",
+        blocked_message_markers=["i'm sorry, i can't", "i cannot assist"],
+    ),
+])
+
+result = chain.run("How do I bypass security controls?")
+if not result.passed:
+    print(f"[{result.action}] {result.violation_detail}")
 ```
 
 #### 5. Detect hallucination in a generated answer
@@ -925,7 +946,7 @@ from llm_agents.rag.pipeline import RagPipeline
 
 # Wire your real components here
 rag_pipeline = ...        # RagPipeline instance
-guardrail_chain = GuardrailChain(filters=[KeywordFilter(blocked=["secret"])])
+guardrail_chain = GuardrailChain([KeywordFilter(["secret"])])
 
 router = build_router()
 app = create_app(
@@ -951,6 +972,85 @@ curl -X POST http://localhost:8000/chat \
 curl -X POST http://localhost:8000/rag/answer \
   -H "Content-Type: application/json" \
   -d '{"query": "What is the capital of France?", "top_k": 3}'
+```
+
+#### 9. Local model inference — HuggingFace and llama.cpp
+
+```python
+# requires: uv sync --extra local-inference
+from llm_agents.infra.model_hub import HuggingFaceBackend, LlamaCppBackend, ModelHub
+
+# HuggingFace transformers backend
+hf_backend = HuggingFaceBackend(
+    model_name="facebook/opt-125m",
+    device="cpu",          # "cuda" for GPU
+)
+
+# GGUF model via llama.cpp — zero API cost, runs fully local
+gguf_backend = LlamaCppBackend(
+    model_path="/models/llama-3-8b.Q4_K_M.gguf",
+    n_ctx=4096,
+    n_gpu_layers=32,       # 0 for CPU-only
+)
+
+hub = ModelHub(backends={"opt-125m": hf_backend, "llama-8b": gguf_backend})
+
+resp = hub.get("opt-125m").generate("What is retrieval-augmented generation?")
+print(resp)
+
+resp = hub.get("llama-8b").generate("Summarise RAG in one sentence.")
+print(resp)
+```
+
+#### 10. Model versioning and rollback with MLflow
+
+```python
+from llm_agents.infra.model_hub import ModelHub, MLflowVersionLogger, FakeBackend
+
+# Version logger is optional — omit it to track versions without MLflow
+logger = MLflowVersionLogger(
+    tracking_uri="http://localhost:5000",
+    experiment_name="model_versions",
+)
+hub = ModelHub(version_logger=logger)
+
+# Replace FakeBackend with a real backend (OpenAIBackend, HuggingFaceBackend, …)
+v1 = FakeBackend("my-model", ["checkpoint-v1"])
+v2 = FakeBackend("my-model", ["checkpoint-v2"])
+
+hub.register_version(v1, "1.0.0", tags={"env": "prod"})
+hub.register_version(v2, "2.0.0", tags={"env": "prod"})
+
+print(hub.list_versions("my-model"))    # ["1.0.0", "2.0.0"]
+print(hub.active_version("my-model"))   # "2.0.0"
+
+# Roll back when a new version shows regressions
+ok = hub.rollback("my-model", "1.0.0")
+print(ok)                               # True
+print(hub.active_version("my-model"))   # "1.0.0" — v1 is live again
+```
+
+#### 11. Provider embedders — OpenAI and Cohere
+
+```python
+# OpenAI embedder (requires: uv sync --extra openai; OPENAI_API_KEY must be set)
+from llm_agents.rag.embeddings import OpenAIEmbedder
+from llm_agents.rag.vector_store import InMemoryVectorStore
+from llm_agents.rag.indexing import Indexer
+
+embedder = OpenAIEmbedder(model="text-embedding-3-small")
+store = InMemoryVectorStore()
+indexer = Indexer(embedder=embedder, store=store)
+indexer.index("doc-1", "Paris is the capital of France.",
+              metadata={"text": "Paris is the capital of France."})
+
+# Cohere embedder (requires: uv sync --extra cohere; COHERE_API_KEY must be set)
+from llm_agents.rag.embeddings import CohereEmbedder
+
+embedder = CohereEmbedder(model="embed-english-v3.0")
+# Both satisfy the Embedder Protocol — drop in wherever FakeEmbedder or
+# SentenceTransformerEmbedder is used; no other changes required
+indexer = Indexer(embedder=embedder, store=store)
 ```
 
 ---
