@@ -4,8 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from llm_agents.training.fine_tuning import FineTuneConfig, FineTuneResult, FineTuner
-
+from llm_agents.training.fine_tuning import FineTuneConfig, FineTuner, FineTuneResult
 
 # ---------------------------------------------------------------------------
 # Helpers — fake trainer

@@ -6,10 +6,7 @@ import json
 import tempfile
 from pathlib import Path
 
-import pytest
-
 from llm_agents.training.datasets import Dataset, DatasetLoader, Example, from_prodigy
-
 
 # ---------------------------------------------------------------------------
 # Helpers

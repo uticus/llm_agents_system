@@ -9,7 +9,6 @@ from llm_agents.data.connectors import Document, FakeConnector
 from llm_agents.data.ingestion import IngestionPipeline, IngestionReport
 from llm_agents.data.parsers import ParsedDocument, TextParser
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

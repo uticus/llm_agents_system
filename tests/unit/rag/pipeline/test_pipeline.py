@@ -8,7 +8,6 @@ from llm_agents.rag.reranking import FakeReranker
 from llm_agents.rag.retrieval import DenseRetriever, RetrievedPassage
 from llm_agents.rag.vector_store import InMemoryVectorStore
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

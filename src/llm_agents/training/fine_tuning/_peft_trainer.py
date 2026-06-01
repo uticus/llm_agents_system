@@ -130,8 +130,10 @@ def peft_trainer_factory(config: FineTuneConfig, dataset: Any) -> PeftTrainer:
         from transformers import (  # noqa: PLC0415
             AutoModelForCausalLM,
             AutoTokenizer,
-            Trainer as HFTrainer,
             TrainingArguments,
+        )
+        from transformers import (
+            Trainer as HFTrainer,
         )
     except ImportError as exc:
         raise ImportError(

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from llm_agents.training.experiment_tracking import InMemoryTracker, NoOpTracker, Tracker
 
-
 # ---------------------------------------------------------------------------
 # Tracker protocol
 # ---------------------------------------------------------------------------

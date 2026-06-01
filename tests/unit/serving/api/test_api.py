@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
-
 import pytest
 
 fastapi = pytest.importorskip("fastapi")
@@ -11,7 +9,6 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 from llm_agents.serving.api import create_app  # noqa: E402
 from llm_agents.serving.api._schemas import ChatResponse, HealthResponse, RagResponse  # noqa: E402
-
 
 # ---------------------------------------------------------------------------
 # Mock sub-systems

@@ -6,7 +6,6 @@ import asyncio
 
 from llm_agents.data.connectors import Connector, Document, FakeConnector
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

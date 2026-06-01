@@ -8,7 +8,6 @@ import pytest
 
 from llm_agents.rag.embeddings import BatchEmbedder, Embedder, FakeEmbedder
 
-
 # ---------------------------------------------------------------------------
 # Embedder protocol
 # ---------------------------------------------------------------------------

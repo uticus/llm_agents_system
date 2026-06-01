@@ -2,12 +2,7 @@
 
 from __future__ import annotations
 
-import math
-
-import pytest
-
 from llm_agents.rag.vector_store import InMemoryVectorStore, SearchResult, VectorStore
-
 
 # ---------------------------------------------------------------------------
 # SearchResult

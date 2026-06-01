@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 from llm_agents.rag.embeddings import FakeEmbedder
-from llm_agents.rag.indexing import IndexReport, Indexer
+from llm_agents.rag.indexing import Indexer, IndexReport
 from llm_agents.rag.vector_store import InMemoryVectorStore
-
 
 # ---------------------------------------------------------------------------
 # Helpers

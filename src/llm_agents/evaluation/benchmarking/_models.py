@@ -49,7 +49,7 @@ class Suite:
         path: str | Path,
         *,
         name: str | None = None,
-    ) -> "Suite":
+    ) -> Suite:
         """Load a :class:`Suite` from a JSONL file.
 
         Each line must be a JSON object with ``task_id``, ``input``, and

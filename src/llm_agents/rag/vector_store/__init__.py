@@ -11,7 +11,8 @@ Public surface
 - :class:`PgVectorStore` — PostgreSQL pgvector-backed store (requires ``pgvector`` extra).
 - :class:`WeaviateVectorStore` — Weaviate HNSW-backed store (requires ``weaviate`` extra).
 - :class:`ChromaVectorStore` — Chroma HNSW-backed store (requires ``chroma`` extra).
-- :class:`ElasticsearchVectorStore` — Elasticsearch dense_vector HNSW store (requires ``elasticsearch`` extra).
+- :class:`ElasticsearchVectorStore` — Elasticsearch dense_vector HNSW store
+  (requires ``elasticsearch`` extra).
 """
 
 from llm_agents.rag.vector_store._chroma_store import ChromaVectorStore

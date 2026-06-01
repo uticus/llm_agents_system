@@ -9,7 +9,6 @@ from llm_agents.data.parsers import (
     TextParser,
 )
 
-
 # ---------------------------------------------------------------------------
 # ParsedDocument
 # ---------------------------------------------------------------------------
@@ -95,7 +94,7 @@ class TestTextParserStr:
 class TestTextParserBytes:
     def test_bytes_decoded_utf8(self) -> None:
         tp = TextParser()
-        result = tp.parse("hello".encode(), doc_id="d1")
+        result = tp.parse(b"hello", doc_id="d1")
         assert result.text == "hello"
 
     def test_bytes_decoded_with_encoding(self) -> None:

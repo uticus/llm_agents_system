@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-from llm_agents.rag.retrieval import RetrievedPassage
 from llm_agents.rag.reranking import FakeReranker, Reranker, ScoreReranker
-
+from llm_agents.rag.retrieval import RetrievedPassage
 
 # ---------------------------------------------------------------------------
 # Helpers

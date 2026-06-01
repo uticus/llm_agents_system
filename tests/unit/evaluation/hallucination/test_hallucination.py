@@ -1,4 +1,7 @@
-"""Unit tests for evaluation/hallucination: HallucinationReport, OverlapDetector, LLMJudgeDetector."""
+"""Unit tests for evaluation/hallucination.
+
+Covers: HallucinationReport, OverlapDetector, LLMJudgeDetector.
+"""
 
 from __future__ import annotations
 
@@ -10,7 +13,6 @@ from llm_agents.evaluation.hallucination import (
     LLMJudgeDetector,
     OverlapDetector,
 )
-
 
 # ---------------------------------------------------------------------------
 # HallucinationReport
