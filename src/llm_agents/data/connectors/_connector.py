@@ -70,6 +70,7 @@ class FakeConnector:
         for i, doc in enumerate(documents):
             if doc.cursor is None:
                 from dataclasses import replace
+
                 doc = replace(doc, cursor=i)
             self._documents.append(doc)
         self.fetch_count = 0

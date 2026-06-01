@@ -282,9 +282,8 @@ class TestHallucinationEndToEnd:
     def test_success_rate_is_one(self) -> None:
         runner = BenchmarkRunner(agent_fn=hallucination_agent)
         report = asyncio.run(runner.run(hallucination_suite()))
-        assert report.success_rate == pytest.approx(1.0), (
-            "Failing tasks: "
-            + str([r.task_id for r in report.task_results if not r.success])
+        assert report.success_rate == pytest.approx(1.0), "Failing tasks: " + str(
+            [r.task_id for r in report.task_results if not r.success]
         )
         assert len(report.task_results) == 25
 
@@ -356,9 +355,8 @@ class TestClassificationEndToEnd:
     def test_success_rate_is_one(self) -> None:
         runner = BenchmarkRunner(agent_fn=classification_agent)
         report = asyncio.run(runner.run(classification_suite()))
-        assert report.success_rate == pytest.approx(1.0), (
-            "Failing tasks: "
-            + str([r.task_id for r in report.task_results if not r.success])
+        assert report.success_rate == pytest.approx(1.0), "Failing tasks: " + str(
+            [r.task_id for r in report.task_results if not r.success]
         )
         assert len(report.task_results) == 20
 
@@ -380,9 +378,7 @@ class TestBuiltinSuitesRegistry:
 
     def test_suite_names_match_keys(self) -> None:
         for key, suite in BUILTIN_SUITES.items():
-            assert suite.name == key, (
-                f"BUILTIN_SUITES[{key!r}].name = {suite.name!r} (mismatch)"
-            )
+            assert suite.name == key, f"BUILTIN_SUITES[{key!r}].name = {suite.name!r} (mismatch)"
 
     def test_all_suites_non_empty(self) -> None:
         for key, suite in BUILTIN_SUITES.items():
@@ -404,6 +400,7 @@ class TestBuiltinAgentsRegistry:
 
     def test_all_agents_are_coroutine_functions(self) -> None:
         import asyncio as _asyncio
+
         for name, agent_fn in BUILTIN_AGENTS.items():
             # agent must return a coroutine when called with a dummy string
             coro = agent_fn("test")
@@ -421,11 +418,13 @@ class TestBuiltinAgentsRegistry:
 class TestModuleExports:
     def test_builtin_suites_importable_from_package(self) -> None:
         from llm_agents.evaluation.benchmarking import BUILTIN_SUITES as bs  # noqa: PLC0415
+
         assert isinstance(bs, dict)
         assert len(bs) >= 5
 
     def test_builtin_agents_importable_from_package(self) -> None:
         from llm_agents.evaluation.benchmarking import BUILTIN_AGENTS as ba  # noqa: PLC0415
+
         assert isinstance(ba, dict)
         assert len(ba) >= 5
 

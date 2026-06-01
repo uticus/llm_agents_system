@@ -18,7 +18,6 @@ from typing import TYPE_CHECKING, Any
 from llm_agents.core.planning._models import Plan, Step
 
 if TYPE_CHECKING:
-
     pass
 
 try:
@@ -154,7 +153,7 @@ def _parse_steps(text: str) -> list[Step]:
         stripped = line.strip()
         upper = stripped.upper()
         if upper.startswith("STEP:"):
-            description = stripped[len("STEP:"):].strip()
+            description = stripped[len("STEP:") :].strip()
             if description:
                 steps.append(Step(description=description))
     return steps

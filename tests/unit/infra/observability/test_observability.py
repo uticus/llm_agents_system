@@ -130,20 +130,22 @@ def test_histogram_bucket_counts_are_cumulative():
     """T3b: bucket counts are cumulative; +Inf is always present and equals count."""
     h = Histogram(buckets=(0.1, 0.5, 1.0))
     h.observe(0.05)  # <= 0.1, <= 0.5, <= 1.0, <= +Inf
-    h.observe(0.3)   # > 0.1, <= 0.5, <= 1.0, <= +Inf
-    h.observe(2.0)   # > 0.1, > 0.5, > 1.0, <= +Inf
+    h.observe(0.3)  # > 0.1, <= 0.5, <= 1.0, <= +Inf
+    h.observe(2.0)  # > 0.1, > 0.5, > 1.0, <= +Inf
 
     bkts = dict(h.buckets())
     assert bkts[0.1] == 1
     assert bkts[0.5] == 2
     assert bkts[1.0] == 2
     import math
+
     assert bkts[math.inf] == 3  # +Inf == total count
 
 
 def test_histogram_inf_bucket_always_present():
     """T3c: +Inf bucket is always appended even if not in the provided list."""
     import math
+
     h = Histogram(buckets=(0.1,))
     les = [le for le, _ in h.buckets()]
     assert math.inf in les
@@ -154,6 +156,7 @@ def test_histogram_custom_buckets():
     h = Histogram(buckets=(1.0, 5.0, 10.0))
     boundaries = [le for le, _ in h.buckets()]
     import math
+
     assert 1.0 in boundaries
     assert 5.0 in boundaries
     assert 10.0 in boundaries
@@ -224,7 +227,7 @@ def test_export_histogram_format():
     output = reg.export()
 
     assert "# TYPE llm_agents_latency histogram" in output
-    assert '# HELP llm_agents_latency Latency seconds.' in output
+    assert "# HELP llm_agents_latency Latency seconds." in output
     assert 'le="+Inf"' in output
     assert "llm_agents_latency_sum" in output
     assert "llm_agents_latency_count" in output
@@ -267,6 +270,7 @@ def _capture_log(name: str, msg: str, **extra) -> dict:
     stdlib_logger.handlers.clear()
     handler = logging.StreamHandler(buf)
     from llm_agents.infra.observability._logging import JSONFormatter
+
     handler.setFormatter(JSONFormatter())
     stdlib_logger.addHandler(handler)
     stdlib_logger.setLevel(logging.DEBUG)
@@ -310,6 +314,7 @@ def test_structured_logger_trace_correlation_inside_span():
         stdlib_logger.handlers.clear()
         handler = logging.StreamHandler(buf)
         from llm_agents.infra.observability._logging import JSONFormatter  # noqa: PLC0415
+
         handler.setFormatter(JSONFormatter())
         stdlib_logger.addHandler(handler)
         stdlib_logger.setLevel(logging.DEBUG)
@@ -482,6 +487,7 @@ def test_bridge_span_llm_empty_attributes_no_raise():
 def test_bridge_span_does_not_raise_on_bad_data():
     """T13b: bridge_span is fault-tolerant; any internal error emits a warning, not an exception."""
     import warnings
+
     # Construct a span with an unparseable attributes value to force a potential error
     span = _make_finished_span(kind=SpanKind.INTERNAL, status=SpanStatus.OK, duration_s=0.1)
 

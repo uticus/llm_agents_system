@@ -110,9 +110,7 @@ class Dataset:
                 issues.append(f"Example {i} has empty label.")
             label_counts[ex.label] = label_counts.get(ex.label, 0) + 1
         if len(label_counts) == 1:
-            issues.append(
-                f"Only one unique label present: '{next(iter(label_counts))}'."
-            )
+            issues.append(f"Only one unique label present: '{next(iter(label_counts))}'.")
         return issues
 
     def __len__(self) -> int:

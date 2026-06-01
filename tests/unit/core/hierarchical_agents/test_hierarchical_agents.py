@@ -170,9 +170,7 @@ def test_supervisor_sequential_delegates_to_worker():
 
 def test_supervisor_multi_step_all_done():
     """T3b: Supervisor handles multi-step plans; all workers return success."""
-    planner_router = _router_with_responses(
-        "STEP: step one\nSTEP: step two\nSTEP: step three"
-    )
+    planner_router = _router_with_responses("STEP: step one\nSTEP: step two\nSTEP: step three")
     planner = LLMPlanner(router=planner_router, model="fake")
     worker = _MockWorker("ok")
     supervisor = Supervisor(planner=planner, workers=[worker])
@@ -201,9 +199,7 @@ def test_supervisor_passes_step_description_to_worker():
 
 def test_supervisor_worker_failure_does_not_abort():
     """T4: A failing worker is recorded; remaining workers still execute."""
-    planner_router = _router_with_responses(
-        "STEP: step one\nSTEP: step two\nSTEP: step three"
-    )
+    planner_router = _router_with_responses("STEP: step one\nSTEP: step two\nSTEP: step three")
     planner = LLMPlanner(router=planner_router, model="fake")
 
     class _AlternatingWorker:
@@ -319,9 +315,5 @@ def test_supervisor_emits_agent_span_on_failure():
 
     collector = get_collector()
     all_spans = [s for t in collector.all_traces() for s in t.spans]
-    sup_span = next(
-        s
-        for s in all_spans
-        if s.name == "supervisor:run" and s.kind == SpanKind.AGENT
-    )
+    sup_span = next(s for s in all_spans if s.name == "supervisor:run" and s.kind == SpanKind.AGENT)
     assert sup_span.status == SpanStatus.ERROR

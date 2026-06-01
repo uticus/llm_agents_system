@@ -122,24 +122,28 @@ class TestDatasetValidate:
         assert any("empty" in i.lower() for i in issues)
 
     def test_empty_text_issue(self) -> None:
-        ds = Dataset(name="ds", examples=[
-            Example(text="", label="pos"),
-            Example(text="good", label="neg"),
-        ])
+        ds = Dataset(
+            name="ds",
+            examples=[
+                Example(text="", label="pos"),
+                Example(text="good", label="neg"),
+            ],
+        )
         issues = ds.validate()
         assert any("empty text" in i for i in issues)
 
     def test_empty_label_issue(self) -> None:
-        ds = Dataset(name="ds", examples=[
-            Example(text="good text", label=""),
-        ])
+        ds = Dataset(
+            name="ds",
+            examples=[
+                Example(text="good text", label=""),
+            ],
+        )
         issues = ds.validate()
         assert any("empty label" in i for i in issues)
 
     def test_single_label_issue(self) -> None:
-        ds = Dataset(name="ds", examples=[
-            Example(text=f"t{i}", label="pos") for i in range(5)
-        ])
+        ds = Dataset(name="ds", examples=[Example(text=f"t{i}", label="pos") for i in range(5)])
         issues = ds.validate()
         assert any("one unique label" in i for i in issues)
 

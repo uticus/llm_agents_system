@@ -175,9 +175,14 @@ def test_backoff_sleep_called_with_correct_delays(monkeypatch):
     monkeypatch.setattr(asyncio, "sleep", fake_sleep)
 
     # Provider fails 2 times then succeeds (max_retries=2, backoff_base=0.1)
-    provider = FakeProvider("p", [
-        RuntimeError("fail"), RuntimeError("fail"), _make_response(),
-    ])
+    provider = FakeProvider(
+        "p",
+        [
+            RuntimeError("fail"),
+            RuntimeError("fail"),
+            _make_response(),
+        ],
+    )
     router = _make_router((provider, "m"), export_hook=None, max_retries=2, backoff_base_s=0.1)
     asyncio.run(router.complete(_make_request()))
 

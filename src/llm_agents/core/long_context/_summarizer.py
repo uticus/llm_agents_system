@@ -16,9 +16,7 @@ from llm_agents.core.long_context._tokenizer import Tokenizer
 from llm_agents.infra.inference_routing._models import LLMRequest
 from llm_agents.infra.inference_routing._router import Router
 
-_SUMMARY_PROMPT = (
-    "Summarize the following text concisely, preserving key information:\n\n"
-)
+_SUMMARY_PROMPT = "Summarize the following text concisely, preserving key information:\n\n"
 
 
 class Summarizer:

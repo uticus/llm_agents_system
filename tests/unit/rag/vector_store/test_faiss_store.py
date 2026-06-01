@@ -77,8 +77,8 @@ class TestFAISSVectorStoreSearch:
 
     def test_nearest_neighbour_ranked_first(self) -> None:
         store = FAISSVectorStore()
-        store.upsert("close", _unit(4, 0))         # identical direction
-        store.upsert("far",   _unit(4, 1))          # orthogonal
+        store.upsert("close", _unit(4, 0))  # identical direction
+        store.upsert("far", _unit(4, 1))  # orthogonal
         results = store.search(_unit(4, 0), top_k=2)
         assert results[0].doc_id == "close"
 

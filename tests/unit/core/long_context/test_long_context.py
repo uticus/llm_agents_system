@@ -211,8 +211,9 @@ def test_summarizer_one_call_per_chunk():
     # Craft text so it makes exactly 2 chunks with small max_chunk_tokens
     # Each word is 4 chars = 1 token; max_chunk_tokens=4 → 4 words per chunk
     text = " ".join(["word"] * 10)  # 10 words → should produce 3 chunks at 4 tokens each
-    resp = LLMResponse(model="m", content="chunksum", prompt_tokens=5,
-                       completion_tokens=3, latency_s=0.01)
+    resp = LLMResponse(
+        model="m", content="chunksum", prompt_tokens=5, completion_tokens=3, latency_s=0.01
+    )
     provider = FakeProvider("p", [resp] * 10)
     policy = RoutingPolicy(
         candidates=[Candidate(provider=provider, model="m")],

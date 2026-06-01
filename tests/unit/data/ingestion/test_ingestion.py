@@ -210,9 +210,7 @@ class TestIngestionPipelineErrors:
                 raise ValueError("cannot parse")
 
         conn = FakeConnector("c", _make_docs("x"))
-        pipeline = IngestionPipeline(
-            conn, BrokenParser(), _identity_chunker, lambda _: None
-        )
+        pipeline = IngestionPipeline(conn, BrokenParser(), _identity_chunker, lambda _: None)
         report = asyncio.run(pipeline.ingest())
         assert report.fetched == 1
         assert report.parsed == 0
@@ -232,9 +230,7 @@ class TestIngestionPipelineErrors:
         ]
         conn = FakeConnector("c", docs)
         upserted: list[str] = []
-        pipeline = IngestionPipeline(
-            conn, SelectiveParser(), _identity_chunker, upserted.append
-        )
+        pipeline = IngestionPipeline(conn, SelectiveParser(), _identity_chunker, upserted.append)
         report = asyncio.run(pipeline.ingest())
         assert report.fetched == 2
         assert report.parsed == 1

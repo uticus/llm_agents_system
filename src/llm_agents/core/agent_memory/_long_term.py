@@ -51,10 +51,7 @@ def _search(items: list[MemoryItem], query: str, limit: int) -> list[MemoryItem]
         return []
     # Rank by timestamp descending (most recent = rank 0)
     sorted_items = sorted(items, key=lambda it: it.timestamp, reverse=True)
-    scored = [
-        (item, _score(item, q_words, rank))
-        for rank, item in enumerate(sorted_items)
-    ]
+    scored = [(item, _score(item, q_words, rank)) for rank, item in enumerate(sorted_items)]
     filtered = sorted(
         ((item, s) for item, s in scored if s > 0),
         key=lambda x: x[1],

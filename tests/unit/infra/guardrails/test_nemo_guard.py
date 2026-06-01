@@ -271,10 +271,12 @@ class TestNeMoGuardCheck:
 
         fake_mod, _, _ = _make_nemo_module("I'm sorry, I cannot help.")
         with patch.dict(sys.modules, {"nemoguardrails": fake_mod}):
-            chain = GuardrailChain([
-                KeywordFilter(["explicit_keyword"]),
-                NeMoGuard("/cfg", blocked_message_markers=["i'm sorry"]),
-            ])
+            chain = GuardrailChain(
+                [
+                    KeywordFilter(["explicit_keyword"]),
+                    NeMoGuard("/cfg", blocked_message_markers=["i'm sorry"]),
+                ]
+            )
             result = chain.run("a harmful request")
         assert result.passed is False
         assert result.action == GuardAction.BLOCK

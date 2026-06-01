@@ -69,16 +69,11 @@ async def _run_suite(suite_name: str) -> dict | list[dict]:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Run a benchmark suite and print a JSON report."
-    )
+    parser = argparse.ArgumentParser(description="Run a benchmark suite and print a JSON report.")
     parser.add_argument(
         "--suite",
         default="tiny",
-        help=(
-            "Suite name to run (default: tiny).  "
-            f"Available: {list(BUILTIN_SUITES) + ['all']}"
-        ),
+        help=(f"Suite name to run (default: tiny).  Available: {list(BUILTIN_SUITES) + ['all']}"),
     )
     args = parser.parse_args()
     result = asyncio.run(_run_suite(args.suite))

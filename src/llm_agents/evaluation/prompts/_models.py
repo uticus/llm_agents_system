@@ -69,9 +69,7 @@ class PromptComparison:
 
     def __post_init__(self) -> None:
         # Stable sort: highest mean_score first.
-        self.results = sorted(
-            self.results, key=lambda r: r.mean_score, reverse=True
-        )
+        self.results = sorted(self.results, key=lambda r: r.mean_score, reverse=True)
 
     @property
     def winner(self) -> PromptVariant | None:

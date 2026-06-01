@@ -94,7 +94,7 @@ class TestDeltaTableLoaderLoad:
         assert ex.label == "positive"
 
     def test_values_coerced_to_str(self) -> None:
-        rows = [{"text": 42, "label": 1}]   # non-string columns
+        rows = [{"text": 42, "label": 1}]  # non-string columns
         mod = _make_deltalake_mock(rows)
         with patch.dict(sys.modules, {"deltalake": mod}):
             ds = DeltaTableLoader.load("/data/t")

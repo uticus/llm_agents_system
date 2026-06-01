@@ -90,9 +90,7 @@ class TestSTEmbedderModuleLevel:
         ]
         for node in top_level_imports:
             if isinstance(node, ast.ImportFrom) and node.module == "sentence_transformers":
-                assert node.col_offset != 0, (
-                    "sentence_transformers must not be a top-level import"
-                )
+                assert node.col_offset != 0, "sentence_transformers must not be a top-level import"
             if isinstance(node, ast.Import):
                 for alias in node.names:
                     assert alias.name != "sentence_transformers", (

@@ -40,9 +40,7 @@ class _FakeRagPipeline:
         return GroundedAnswer(
             query=query,
             answer=f"Answer to: {query}",
-            citations=[
-                RetrievedPassage(doc_id="c1", text="context text", score=0.9)
-            ],
+            citations=[RetrievedPassage(doc_id="c1", text="context text", score=0.9)],
         )
 
 
@@ -146,9 +144,7 @@ class TestChatEndpoint:
         assert body["answer"] == "Hello from mock"
 
     def test_chat_model_field_forwarded(self, client_full) -> None:
-        resp = client_full.post(
-            "/chat", json={"prompt": "Hi", "model": "gpt-4o"}
-        )
+        resp = client_full.post("/chat", json={"prompt": "Hi", "model": "gpt-4o"})
         assert resp.json()["model"] == "gpt-4o"
 
     def test_chat_no_router_503(self, client_no_services) -> None:
@@ -215,9 +211,7 @@ class TestRagAnswerEndpoint:
         assert resp.status_code == 422
 
     def test_rag_blocked_by_guardrail_400(self, client_with_blocking_guardrail) -> None:
-        resp = client_with_blocking_guardrail.post(
-            "/rag/answer", json={"query": "bad query"}
-        )
+        resp = client_with_blocking_guardrail.post("/rag/answer", json={"query": "bad query"})
         assert resp.status_code == 400
 
     def test_rag_top_k_forwarded(self, client_full) -> None:
@@ -225,9 +219,7 @@ class TestRagAnswerEndpoint:
         assert resp.status_code == 200
 
     def test_rag_filters_forwarded(self, client_full) -> None:
-        resp = client_full.post(
-            "/rag/answer", json={"query": "q", "filters": {"doc_id": "A"}}
-        )
+        resp = client_full.post("/rag/answer", json={"query": "q", "filters": {"doc_id": "A"}})
         assert resp.status_code == 200
 
 

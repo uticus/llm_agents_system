@@ -94,6 +94,7 @@ class AllProvidersFailedError(Exception):
     def __init__(self, errors: list[BaseException]) -> None:
         self.errors: list[BaseException] = errors
         super().__init__(
-            f"{len(errors)} provider attempt(s) all failed; "
-            f"last error: {errors[-1]!r}" if errors else "No candidates tried."
+            f"{len(errors)} provider attempt(s) all failed; last error: {errors[-1]!r}"
+            if errors
+            else "No candidates tried."
         )

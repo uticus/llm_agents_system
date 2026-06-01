@@ -60,9 +60,7 @@ def _check_index_name(name: str) -> str:
     if not name:
         raise ValueError("Elasticsearch index name must not be empty.")
     if len(name) > 255:
-        raise ValueError(
-            f"Elasticsearch index name {name!r} must be at most 255 characters."
-        )
+        raise ValueError(f"Elasticsearch index name {name!r} must be at most 255 characters.")
     if not _SAFE_ES_INDEX.match(name):
         raise ValueError(
             f"Invalid Elasticsearch index name {name!r}. "

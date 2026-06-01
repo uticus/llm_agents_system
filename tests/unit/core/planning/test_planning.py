@@ -315,9 +315,7 @@ def test_execute_replanning_on_step_failure():
     the second call (replacement step from the planner succeeds).
     """
     # Single provider: first call raises, second call returns a valid response.
-    provider = FakeProvider(
-        "p", [RuntimeError("boom"), _fake_response("recovered")]
-    )
+    provider = FakeProvider("p", [RuntimeError("boom"), _fake_response("recovered")])
     router = Router(
         RoutingPolicy([Candidate(provider, "fake")], max_retries=0),
         export_hook=None,
@@ -345,9 +343,7 @@ def test_execute_replan_budget_exhausted_halts():
         export_hook=None,
     )
     plan = Plan(goal="fail", steps=[Step(description="doomed step")])
-    result_plan = asyncio.run(
-        execute(plan, _empty_dispatcher(), router, max_replan=0)
-    )
+    result_plan = asyncio.run(execute(plan, _empty_dispatcher(), router, max_replan=0))
     assert result_plan.status == PlanStatus.FAILED
     assert result_plan.steps[0].status == StepStatus.FAILED
 
@@ -360,9 +356,7 @@ def test_execute_no_planner_fails_on_error():
         export_hook=None,
     )
     plan = Plan(goal="fail", steps=[Step(description="broken")])
-    result_plan = asyncio.run(
-        execute(plan, _empty_dispatcher(), router, planner=None)
-    )
+    result_plan = asyncio.run(execute(plan, _empty_dispatcher(), router, planner=None))
     assert result_plan.status == PlanStatus.FAILED
 
 
@@ -398,9 +392,7 @@ def test_execute_failed_plan_span_has_error_status():
 
     collector = get_collector()
     all_spans = [s for t in collector.all_traces() for s in t.spans]
-    exec_span = next(
-        s for s in all_spans if s.name == "plan:execute" and s.kind == SpanKind.AGENT
-    )
+    exec_span = next(s for s in all_spans if s.name == "plan:execute" and s.kind == SpanKind.AGENT)
     assert exec_span.status == SpanStatus.ERROR
 
 

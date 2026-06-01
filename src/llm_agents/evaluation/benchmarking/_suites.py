@@ -211,6 +211,7 @@ async def qa_lookup_agent(input_text: str) -> str:  # noqa: RUF029
 # "Supported" tasks score ≥ 0.80; "not_supported" tasks score ≤ 0.20.
 # ---------------------------------------------------------------------------
 
+
 def _hp(passage: str, claim: str) -> str:
     """Format a passage+claim input string."""
     return f"PASSAGE: {passage}\nCLAIM: {claim}"
@@ -361,16 +362,44 @@ async def hallucination_agent(input_text: str) -> str:  # noqa: RUF029
 # Suite 4: classification — 20 sentiment classification tasks
 # ---------------------------------------------------------------------------
 
-_POSITIVE_WORDS: frozenset[str] = frozenset({
-    "excellent", "love", "wonderful", "amazing", "fantastic", "brilliant",
-    "best", "perfect", "great", "happy", "enjoy", "impressive", "outstanding",
-    "superb", "delightful",
-})
+_POSITIVE_WORDS: frozenset[str] = frozenset(
+    {
+        "excellent",
+        "love",
+        "wonderful",
+        "amazing",
+        "fantastic",
+        "brilliant",
+        "best",
+        "perfect",
+        "great",
+        "happy",
+        "enjoy",
+        "impressive",
+        "outstanding",
+        "superb",
+        "delightful",
+    }
+)
 
-_NEGATIVE_WORDS: frozenset[str] = frozenset({
-    "terrible", "awful", "worst", "hate", "bad", "horrible", "disappointing",
-    "poor", "useless", "dreadful", "disgusting", "appalling", "pathetic", "waste",
-})
+_NEGATIVE_WORDS: frozenset[str] = frozenset(
+    {
+        "terrible",
+        "awful",
+        "worst",
+        "hate",
+        "bad",
+        "horrible",
+        "disappointing",
+        "poor",
+        "useless",
+        "dreadful",
+        "disgusting",
+        "appalling",
+        "pathetic",
+        "waste",
+    }
+)
 
 # fmt: off
 _CLASSIFICATION_TASKS: list[tuple[str, str, str]] = [

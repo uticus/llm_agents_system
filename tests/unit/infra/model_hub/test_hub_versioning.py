@@ -239,8 +239,8 @@ class TestRollback:
         hub.rollback("m", "v1")
         args, _ = logger.on_rollback.call_args
         assert args[0] == "m"
-        assert args[1] == "v2"   # from_version (was active before rollback)
-        assert args[2] == "v1"   # to_version
+        assert args[1] == "v2"  # from_version (was active before rollback)
+        assert args[2] == "v1"  # to_version
 
     def test_rollback_no_logger_no_error(self) -> None:
         hub = ModelHub()

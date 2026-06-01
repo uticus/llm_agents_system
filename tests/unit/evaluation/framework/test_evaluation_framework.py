@@ -250,8 +250,7 @@ def test_aggregate_all_pass():
     """T4b: aggregate() with all score=1.0 gives mean=1.0 and pass_rate=1.0."""
     case = _make_case()
     results = [
-        EvalResult(case=case, actual_output="ok", score=1.0, latency_s=0.0)
-        for _ in range(4)
+        EvalResult(case=case, actual_output="ok", score=1.0, latency_s=0.0) for _ in range(4)
     ]
     report = aggregate(results)
     assert report.mean_score == pytest.approx(1.0)
@@ -264,10 +263,7 @@ def test_aggregate_all_pass():
 def test_aggregate_all_fail():
     """T4c: aggregate() with all score=0.0 gives pass_rate=0.0."""
     case = _make_case()
-    results = [
-        EvalResult(case=case, actual_output="", score=0.0, latency_s=0.0)
-        for _ in range(3)
-    ]
+    results = [EvalResult(case=case, actual_output="", score=0.0, latency_s=0.0) for _ in range(3)]
     report = aggregate(results)
     assert report.pass_rate == pytest.approx(0.0)
     assert report.mean_score == pytest.approx(0.0)
@@ -277,10 +273,7 @@ def test_aggregate_mixed_scores():
     """T4d: aggregate() computes correct mean, min, max, std for mixed scores."""
     case = _make_case()
     scores = [0.0, 0.5, 1.0]
-    results = [
-        EvalResult(case=case, actual_output="", score=s, latency_s=0.0)
-        for s in scores
-    ]
+    results = [EvalResult(case=case, actual_output="", score=s, latency_s=0.0) for s in scores]
     report = aggregate(results, threshold=0.5)
     assert report.mean_score == pytest.approx(0.5)
     assert report.min_score == pytest.approx(0.0)
@@ -298,8 +291,7 @@ def test_aggregate_total_runs():
     """T4e: aggregate() reports correct total_runs."""
     case = _make_case()
     results = [
-        EvalResult(case=case, actual_output="ok", score=1.0, latency_s=0.0)
-        for _ in range(6)
+        EvalResult(case=case, actual_output="ok", score=1.0, latency_s=0.0) for _ in range(6)
     ]
     report = aggregate(results)
     assert report.total_runs == 6
@@ -308,9 +300,7 @@ def test_aggregate_total_runs():
 def test_aggregate_custom_threshold():
     """T4f: aggregate() respects a custom threshold for pass_rate."""
     case = _make_case()
-    results = [
-        EvalResult(case=case, actual_output="ok", score=0.7, latency_s=0.0)
-    ]
+    results = [EvalResult(case=case, actual_output="ok", score=0.7, latency_s=0.0)]
     # threshold=0.5: score 0.7 passes
     report_low = aggregate(results, threshold=0.5)
     assert report_low.pass_rate == pytest.approx(1.0)

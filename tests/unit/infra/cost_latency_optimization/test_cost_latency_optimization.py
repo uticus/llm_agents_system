@@ -125,7 +125,7 @@ def test_force_refresh_bypasses_cache():
     cache = CompletionCache(ttl_s=60.0)
     req = _req()
 
-    asyncio.run(cache.cached_complete(req, router))                       # populates cache
+    asyncio.run(cache.cached_complete(req, router))  # populates cache
     result = asyncio.run(cache.cached_complete(req, router, force_refresh=True))  # bypass
     assert result.content == "second"
     assert provider.call_count == 2

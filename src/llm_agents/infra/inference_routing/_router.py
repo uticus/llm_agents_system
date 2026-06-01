@@ -102,9 +102,7 @@ class Router:
                             span.attributes["error"] = str(exc)
                             all_errors.append(exc)
                             if attempt < policy.max_retries:
-                                await asyncio.sleep(
-                                    policy.backoff_base_s * (2**attempt)
-                                )
+                                await asyncio.sleep(policy.backoff_base_s * (2**attempt))
 
             outer_span.status = SpanStatus.ERROR
             outer_span.attributes["error"] = f"{len(all_errors)} attempts failed"

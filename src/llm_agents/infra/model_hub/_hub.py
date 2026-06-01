@@ -45,9 +45,9 @@ class ModelHub:
         version_logger: Any | None = None,
     ) -> None:
         self._backends: dict[str, Any] = dict(backends or {})
-        self._versions: dict[str, list[str]] = {}           # name -> insertion-ordered version list
-        self._version_map: dict[str, dict[str, Any]] = {}   # name -> {version: backend}
-        self._active_versions: dict[str, str] = {}          # name -> currently active version
+        self._versions: dict[str, list[str]] = {}  # name -> insertion-ordered version list
+        self._version_map: dict[str, dict[str, Any]] = {}  # name -> {version: backend}
+        self._active_versions: dict[str, str] = {}  # name -> currently active version
         self._version_logger = version_logger
 
     # ------------------------------------------------------------------

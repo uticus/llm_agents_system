@@ -210,10 +210,12 @@ def test_guard_protocol_embedding():
 
 def test_chain_pass_all():
     """T6: Chain returns PASS when all guards pass."""
-    chain = GuardrailChain([
-        KeywordFilter(["bad"]),
-        RegexFilter([r"\bforbidden\b"]),
-    ])
+    chain = GuardrailChain(
+        [
+            KeywordFilter(["bad"]),
+            RegexFilter([r"\bforbidden\b"]),
+        ]
+    )
     result = chain.run("this is fine text")
     assert result.passed is True
 
@@ -243,10 +245,12 @@ def test_chain_redact_stops_chain():
             second_guard_called[0] = True
             return GuardResult.pass_(text)
 
-    chain = GuardrailChain([
-        RedactFilter([r"secret"]),
-        _TrackingGuard(),
-    ])
+    chain = GuardrailChain(
+        [
+            RedactFilter([r"secret"]),
+            _TrackingGuard(),
+        ]
+    )
     result = chain.run("the secret key is here")
     assert result.action == GuardAction.REDACT
     assert second_guard_called[0] is False, "Chain must stop at REDACT"

@@ -54,13 +54,9 @@ def _check_collection_name(name: str) -> str:
         ValueError: If ``name`` violates any Chroma naming rule.
     """
     if len(name) < 3:
-        raise ValueError(
-            f"Chroma collection name {name!r} must be at least 3 characters."
-        )
+        raise ValueError(f"Chroma collection name {name!r} must be at least 3 characters.")
     if len(name) > 63:
-        raise ValueError(
-            f"Chroma collection name {name!r} must be at most 63 characters."
-        )
+        raise ValueError(f"Chroma collection name {name!r} must be at most 63 characters.")
     if not _SAFE_CHROMA.match(name):
         raise ValueError(
             f"Invalid Chroma collection name {name!r}. "
@@ -68,9 +64,7 @@ def _check_collection_name(name: str) -> str:
             "ASCII letters, digits, underscores, dots, and hyphens."
         )
     if ".." in name:
-        raise ValueError(
-            f"Chroma collection name {name!r} must not contain consecutive dots."
-        )
+        raise ValueError(f"Chroma collection name {name!r} must not contain consecutive dots.")
     return name
 
 

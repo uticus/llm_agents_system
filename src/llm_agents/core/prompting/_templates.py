@@ -119,10 +119,7 @@ class FewShotTemplate:
         """
         parts: list[str] = [self.instruction]
         for ex in self.examples:
-            block = (
-                f"{self.input_label}: {ex.input_text}\n"
-                f"{self.output_label}: {ex.output_text}"
-            )
+            block = f"{self.input_label}: {ex.input_text}\n{self.output_label}: {ex.output_text}"
             parts.append(block)
         parts.append(f"{self.query_label}: {query}\n{self.output_label}:")
         return self.separator.join(parts)

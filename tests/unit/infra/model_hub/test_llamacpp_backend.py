@@ -26,9 +26,7 @@ def _make_llama_cpp_module(text: str = "result") -> tuple[ModuleType, MagicMock]
     ``mock_llama_instance``.  Calling ``mock_llama_instance(prompt, ...)``
     returns the llama.cpp completion dict format.
     """
-    mock_instance = MagicMock(
-        return_value={"choices": [{"text": text}]}
-    )
+    mock_instance = MagicMock(return_value={"choices": [{"text": text}]})
     fake_mod = ModuleType("llama_cpp")
     fake_mod.Llama = MagicMock(return_value=mock_instance)  # type: ignore[attr-defined]
     return fake_mod, mock_instance

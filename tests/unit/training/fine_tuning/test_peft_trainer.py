@@ -126,9 +126,7 @@ class TestPeftTrainerModuleLevel:
         source = inspect.getsource(mod)
         tree = ast.parse(source)
         for node in ast.walk(tree):
-            is_peft = isinstance(node, ast.ImportFrom) and (
-                (node.module or "").startswith("peft")
-            )
+            is_peft = isinstance(node, ast.ImportFrom) and ((node.module or "").startswith("peft"))
             if is_peft:
                 assert node.col_offset != 0, "peft must not be a top-level import"
             if isinstance(node, ast.Import):
@@ -231,9 +229,7 @@ class TestPeftTrainerGetMetrics:
         mock_output = MagicMock()
         mock_output.metrics = {}
         mock_hf = MagicMock()
-        mock_hf.state.log_history = [
-            {"step": 10, "epoch": 1.0, "learning_rate": 2e-4, "loss": 0.3}
-        ]
+        mock_hf.state.log_history = [{"step": 10, "epoch": 1.0, "learning_rate": 2e-4, "loss": 0.3}]
         mock_hf.train.return_value = mock_output
         trainer = PeftTrainer(mock_hf)
         trainer.train()
@@ -303,9 +299,7 @@ class TestPeftTrainerFactory:
         with patch.dict(sys.modules, _modules(trans, peft_mod)):
             config = FineTuneConfig(base_model="meta-llama/Llama-2-7b-hf")
             peft_trainer_factory(config, [])
-        trans.AutoTokenizer.from_pretrained.assert_called_once_with(
-            "meta-llama/Llama-2-7b-hf"
-        )
+        trans.AutoTokenizer.from_pretrained.assert_called_once_with("meta-llama/Llama-2-7b-hf")
 
     def test_model_loaded_with_base_model(self) -> None:
         trans, peft_mod, _ = _make_mocks()

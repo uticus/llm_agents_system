@@ -78,16 +78,12 @@ def detect_divergence(recorded: Trace, fresh: Trace) -> list[str]:
     fresh_spans = sorted(fresh.spans, key=lambda s: s.start_time)
 
     if len(rec_spans) != len(fresh_spans):
-        issues.append(
-            f"Span count differs: recorded={len(rec_spans)}, fresh={len(fresh_spans)}"
-        )
+        issues.append(f"Span count differs: recorded={len(rec_spans)}, fresh={len(fresh_spans)}")
 
     rec_names = [s.name for s in rec_spans]
     fresh_names = [s.name for s in fresh_spans]
     if rec_names != fresh_names:
-        issues.append(
-            f"Span name sequence differs: recorded={rec_names!r}, fresh={fresh_names!r}"
-        )
+        issues.append(f"Span name sequence differs: recorded={rec_names!r}, fresh={fresh_names!r}")
 
     # Per-span status comparison (only for positions present in both).
     for i, (rec, frsh) in enumerate(zip(rec_spans, fresh_spans, strict=False)):

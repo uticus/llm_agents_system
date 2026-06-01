@@ -91,9 +91,7 @@ class FineTuner:
 
             version_id: str | None = None
             if self._model_hub is not None:
-                version_id = _register_artifact(
-                    self._model_hub, self._config, metrics
-                )
+                version_id = _register_artifact(self._model_hub, self._config, metrics)
 
             return FineTuneResult(
                 model_path=self._config.output_dir,

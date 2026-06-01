@@ -411,9 +411,7 @@ class TestWeaviateVectorStoreSearch:
 
     def test_search_score_is_one_minus_distance(self) -> None:
         client, collection = _make_client()
-        collection.query.near_vector.return_value.objects = [
-            _make_search_object("doc", 0.2, {})
-        ]
+        collection.query.near_vector.return_value.objects = [_make_search_object("doc", 0.2, {})]
         store = WeaviateVectorStore(client, dimensions=2)
         store._ready = True
         store._collection = collection
