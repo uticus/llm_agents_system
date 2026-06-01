@@ -2679,6 +2679,7 @@ data = [
     { name = "python-docx" },
 ]
 dev = [
+    { name = "pydantic" },
     { name = "pytest" },
     { name = "ruff" },
 ]
@@ -2730,6 +2731,7 @@ requires-dist = [
     { name = "pgvector", marker = "extra == 'pgvector'", specifier = ">=0.3" },
     { name = "psycopg", extras = ["binary"], marker = "extra == 'data'", specifier = ">=3.2" },
     { name = "psycopg", extras = ["binary"], marker = "extra == 'pgvector'", specifier = ">=3.2" },
+    { name = "pydantic", marker = "extra == 'dev'", specifier = ">=2.0" },
     { name = "pypdf", marker = "extra == 'data'", specifier = ">=5.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "python-docx", marker = "extra == 'data'", specifier = ">=1.1" },

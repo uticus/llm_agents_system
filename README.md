@@ -397,7 +397,7 @@ llm_agents_system/
       benchmarking/               BenchmarkTask, Suite, BenchmarkRunner, BenchmarkReport
       hallucination/              HallucinationReport, HallucinationDetector (Protocol), OverlapDetector, LLMJudgeDetector
     config.py                     typed runtime settings (env + configs/)
-  tests/unit/                     mirrors src/ — one test file per module (749 passing)
+  tests/unit/                     mirrors src/ — one test file per module (889 passing with --extra dev --extra rag --extra serving)
   docs/                           per-module documentation
     index.md                      system overview, layer diagram, all flow diagrams
     infra/                        6 module docs
@@ -508,10 +508,9 @@ store (a noted future improvement).
 ## Implementation status
 
 All 30 modules are implemented and tested.  Five external vector-store adapters (FAISS,
-pgvector, Weaviate, Chroma, Elasticsearch) add a further 256 tests on top of the
-30-module baseline.  The test suite has **864 tests passing** (1 skipped: faiss-cpu not
-installed in default dev env; 1 pre-existing failure: pydantic not installed without the
-`serving` extra).
+pgvector, Weaviate, Chroma, Elasticsearch) add a further 230 tests on top of the
+30-module baseline.  The test suite has **889 tests passing** with
+`uv sync --extra dev --extra rag --extra serving` (0 skipped).
 
 | Layer | Modules | Status |
 |---|---|---|
@@ -572,7 +571,6 @@ uv run python -m llm_agents.evaluation.benchmarking --suite <name>
 
 ## Future improvements
 
-- External vector-store adapters: all five adapters (FAISS, pgvector, Weaviate, Chroma, Elasticsearch) are implemented.
 - External embeddings adapters: sentence-transformers, OpenAI embeddings API.
 - Concrete model-hub adapters for HuggingFace and GGUF (llama.cpp / vLLM).
 - NeMo Guardrails adapter behind `guardrails`.
@@ -593,9 +591,9 @@ Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/).
 
 ```bash
 # Install project + dev dependencies (light — no heavy ML/RAG deps)
-uv sync --extra dev
+uv sync --extra dev --extra rag --extra serving
 
-# Run the full test suite (864 passing)
+# Run the full test suite (889 passing)
 uv run pytest
 
 # Run with short tracebacks and quiet output
@@ -724,7 +722,7 @@ print(result.answer)
 print([p.doc_id for p in result.passages])
 ```
 
-#### 2. Swap to a FAISS, pgvector, or Weaviate backend
+#### 2. Swap to a production vector-store backend
 
 All five adapters satisfy the `VectorStore` protocol and drop in anywhere `InMemoryVectorStore` is used:
 
