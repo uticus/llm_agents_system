@@ -40,6 +40,11 @@ serving = [
     "fastapi>=0.115",
     "uvicorn>=0.30",
 ]
+# pgvector PostgreSQL vector-store adapter (requires a running PostgreSQL with the pgvector extension).
+pgvector = [
+    "psycopg[binary]>=3.2",
+    "pgvector>=0.3",
+]
 # Data connectors and document parsers for ingestion.
 data = [
     "psycopg[binary]>=3.2",

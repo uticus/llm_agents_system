@@ -2,7 +2,7 @@
 
 ## Overview
 
-The vector store module provides persistent (or in-process) storage for embedding vectors and associated metadata, along with similarity search over those vectors. It is the core index that makes retrieval-augmented generation possible: at indexing time, chunk embeddings are written into the store; at retrieval time, a query embedding is used to find the nearest stored vectors. The module defines the `VectorStore` structural protocol, a `SearchResult` dataclass for query results, and an `InMemoryVectorStore` implementation backed by a plain Python dict with brute-force cosine similarity computation. Production deployments are expected to swap in FAISS, pgvector, Weaviate, Chroma, or Elasticsearch adapters behind the same protocol.
+The vector store module provides persistent (or in-process) storage for embedding vectors and associated metadata, along with similarity search over those vectors. It is the core index that makes retrieval-augmented generation possible: at indexing time, chunk embeddings are written into the store; at retrieval time, a query embedding is used to find the nearest stored vectors. The module defines the `VectorStore` structural protocol, a `SearchResult` dataclass for query results, and three implementations: `InMemoryVectorStore` (brute-force in-memory, for tests and prototyping), `FAISSVectorStore` (FAISS flat inner-product index with lazy index rebuild, requires the `rag` extra), and `PgVectorStore` (PostgreSQL pgvector extension, persistent and durable, requires the `pgvector` extra). Production deployments swap in `FAISSVectorStore`, `PgVectorStore`, or other adapters behind the same protocol.
 
 ---
 
@@ -13,6 +13,8 @@ The vector store module provides persistent (or in-process) storage for embeddin
 | `SearchResult` | dataclass | Single result from a vector search: doc_id, score, metadata. |
 | `VectorStore` | Protocol | Structural interface for vector stores: upsert, search, delete. |
 | `InMemoryVectorStore` | class | Brute-force in-memory store with cosine similarity; for tests and prototyping. |
+| `FAISSVectorStore` | class | FAISS flat inner-product index with L2-normalised cosine search; requires `rag` extra. |
+| `PgVectorStore` | class | PostgreSQL pgvector-backed store with IVFFlat approximate search; requires `pgvector` extra. |
 
 ### `SearchResult`
 
@@ -64,6 +66,45 @@ class InMemoryVectorStore:
 
 Internally stores `_Entry(vector, metadata)` objects in a dict keyed by `doc_id`. Vectors and metadata are shallow-copied on write to isolate stored state from caller mutations.
 
+### `FAISSVectorStore`
+
+Requires: `pip install llm-agents-system[rag]` (`faiss-cpu>=1.8`).
+
+```python
+class FAISSVectorStore:
+    def __init__(self, dimensions: int | None = None) -> None: ...
+    def upsert(self, doc_id: str, vector: list[float], metadata: dict[str, Any] | None = None) -> None: ...
+    def search(self, query_vector: list[float], top_k: int = 5) -> list[SearchResult]: ...
+    def delete(self, doc_id: str) -> bool: ...
+
+    def __len__(self) -> int: ...
+    def __contains__(self, doc_id: str) -> bool: ...
+```
+
+Backed by `faiss.IndexFlatIP` (exact inner-product search on L2-normalised vectors, equivalent to cosine similarity). The index is rebuilt lazily from the source-of-truth `_data` dict whenever a mutation has occurred since the last search. `import faiss` and `import numpy` are deferred to the first `_build_index` call so the module imports cleanly without the `rag` extra.
+
+### `PgVectorStore`
+
+Requires: `pip install llm-agents-system[pgvector]` (`psycopg[binary]>=3.2`, `pgvector>=0.3`) and a running PostgreSQL server with the `pgvector` extension installed.
+
+```python
+class PgVectorStore:
+    def __init__(
+        self,
+        connection: Any,           # open psycopg.Connection
+        table: str = "llm_vectors",
+        dimensions: int | None = None,
+    ) -> None: ...
+    def upsert(self, doc_id: str, vector: list[float], metadata: dict[str, Any] | None = None) -> None: ...
+    def search(self, query_vector: list[float], top_k: int = 5) -> list[SearchResult]: ...
+    def delete(self, doc_id: str) -> bool: ...
+
+    def __len__(self) -> int: ...
+    def __contains__(self, doc_id: str) -> bool: ...
+```
+
+The caller provides an open `psycopg.Connection`; the store does not manage connection lifecycle. Table, extension, and index creation happen lazily on the first `upsert`. `import pgvector.psycopg` is deferred to the first `_ensure_table` call. Table identifier is validated against a safe-identifier regex to prevent SQL injection.
+
 ---
 
 ## Architecture
@@ -75,35 +116,42 @@ Internally stores `_Entry(vector, metadata)` objects in a dict keyed by `doc_id`
         |
         | upsert(chunk_id, vector, metadata)
         v
-  +-----------------+
-  | VectorStore     |  <-- Protocol
-  |  upsert         |
-  |  search         |
-  |  delete         |
-  +-----------------+
+  +-----------------+         +-----------------------+
+  | VectorStore     |  <---   | InMemoryVectorStore   |  (test / prototype)
+  |  Protocol       |         +-----------------------+
+  |  upsert         |  <---   | FAISSVectorStore      |  (local, rag extra)
+  |  search         |         +-----------------------+
+  |  delete         |  <---   | PgVectorStore         |  (persistent, pgvector extra)
+  +-----------------+         +-----------------------+
         ^
         | search(query_vector, top_k)
         |
    [ DenseRetriever ]
 ```
 
-The vector store sits at the centre of the RAG data plane. Writes come from the `Indexer`; reads come from the `DenseRetriever`. Neither component depends on the concrete implementation, only on the `VectorStore` protocol.
+The vector store sits at the centre of the RAG data plane. Writes come from the `Indexer`; reads come from the `DenseRetriever`. Neither component depends on the concrete implementation — any object satisfying the `VectorStore` protocol is interchangeable.
 
 ### Data flow
 
 **Write path (indexing):**
 1. `Indexer` calls `store.upsert(chunk_id, vector, metadata)`.
-2. `InMemoryVectorStore` copies the vector and metadata into a `_Entry` and stores it under `chunk_id`.
-3. If the key already exists, the old entry is replaced (idempotent upsert).
+2. `InMemoryVectorStore` copies the vector and metadata into `_Entry` and stores it keyed by `chunk_id`.
+3. `FAISSVectorStore` stores vector and metadata in `_data` dict and marks `_dirty = True`.
+4. `PgVectorStore` issues `INSERT ... ON CONFLICT DO UPDATE` to PostgreSQL.
+5. If the key already exists, the old entry is replaced (idempotent upsert) in all implementations.
 
 **Read path (retrieval):**
 1. `DenseRetriever` calls `store.search(query_vector, top_k=k)`.
-2. `InMemoryVectorStore` computes cosine similarity between `query_vector` and every stored vector.
-3. Results are collected into `SearchResult` objects, sorted descending, and the top `k` are returned.
+2. `InMemoryVectorStore`: computes cosine similarity against every stored vector (O(n) brute force).
+3. `FAISSVectorStore`: if `_dirty`, rebuilds `IndexFlatIP` from `_data`; L2-normalises query; calls `index.search`.
+4. `PgVectorStore`: executes `SELECT doc_id, 1.0 - (embedding <=> %s::vector) AS score FROM <table> ORDER BY dist LIMIT k` via the pgvector `<=>` cosine-distance operator.
+5. Results are returned as `list[SearchResult]` sorted by descending score.
 
 **Delete path:**
 1. Caller calls `store.delete(doc_id)`.
-2. Returns `True` if the entry existed and was removed, `False` otherwise.
+2. `InMemoryVectorStore` / `FAISSVectorStore`: removes from internal dict; FAISS marks `_dirty = True` (index rebuilt on next search).
+3. `PgVectorStore`: issues `DELETE FROM <table> WHERE doc_id = %s`; reads `rowcount` to determine whether a row existed.
+4. Returns `True` if the entry existed and was removed, `False` otherwise.
 
 ### Key abstractions
 
@@ -112,6 +160,10 @@ The vector store sits at the centre of the RAG data plane. Writes come from the 
 **`VectorStore` Protocol** enforces three operations: write (upsert), read (search), and delete. Delete is included because production RAG systems must be able to remove stale or retracted documents. The protocol deliberately excludes bulk operations and persistence management to keep it minimal.
 
 **`InMemoryVectorStore`** internal `_cosine` function handles the zero-norm edge case (returns 0.0 for zero vectors) and uses `zip(a, b, strict=False)` so mismatched-length vectors do not raise but silently compute a partial dot product — callers are responsible for dimension consistency.
+
+**`FAISSVectorStore`** maintains a source-of-truth Python dict (`_data`) separate from the FAISS index. The FAISS flat index does not support native deletion, so deletion removes from `_data` and marks `_dirty = True`. The index is fully rebuilt from `_data` on the next `search` call. This keeps correctness trivial at the cost of O(n) rebuild time.
+
+**`PgVectorStore`** uses the injection pattern: the caller passes an open `psycopg.Connection`. This makes the store testable without a running server (mock the connection). The `_ensure_table` method is called lazily on the first `upsert`, which creates the `vector` extension, the table, and an IVFFlat index in a single transaction. Table names are validated with a strict regex to prevent SQL injection — only parameterised queries are used for data values.
 
 ---
 
@@ -137,24 +189,48 @@ The vector store sits at the centre of the RAG data plane. Writes come from the 
   **Why**: Prevents callers from mutating stored metadata after upsert, and prevents the store's internal state from being exposed through search results.
   **Tradeoff**: Deep-nested objects within metadata (nested dicts, lists) are shared by reference. Mutations to deeply nested values will corrupt stored state.
 
+- **Decision**: `FAISSVectorStore` uses full index rebuild on every dirty search rather than incremental insertion-only.
+  **Why**: FAISS flat indices do not support efficient deletion. Full rebuild from the authoritative `_data` dict is simple, correct, and avoids index/dict state divergence.
+  **Tradeoff**: O(n) rebuild cost on every search after any mutation. For n > ~100 000 vectors, rebuild time exceeds acceptable latency; a FAISS HNSW index with soft-delete filtering or a dedicated vector database should be used instead.
+
+- **Decision**: `PgVectorStore` uses IVFFlat index (`vector_cosine_ops`) created at table-init time.
+  **Why**: IVFFlat is supported by all pgvector versions ≥ 0.2 and provides sub-linear approximate search with predictable recall. HNSW (faster but higher memory) is an alternative for pgvector ≥ 0.5.
+  **Tradeoff**: IVFFlat requires at least `lists × 39` rows for good recall. On small tables (< a few hundred rows), the index is slower than a sequential scan and pgvector may ignore it. For large tables the index should be rebuilt with `VACUUM ANALYZE` after bulk inserts.
+
+- **Decision**: `PgVectorStore` receives an injected connection rather than a connection string.
+  **Why**: Connection management (pooling, SSL, reconnect logic) belongs to the caller. Injection makes the store testable with a mock — no live server needed for unit tests.
+  **Tradeoff**: The caller is responsible for keeping the connection open and handling reconnects. A dropped connection raises a `psycopg` error inside the store rather than being handled transparently.
+
+- **Decision**: `PgVectorStore` stores metadata as JSONB rather than separate columns.
+  **Why**: Metadata schema is not known at class-definition time (it varies by corpus). JSONB allows arbitrary key-value pairs and supports GIN indexing for metadata filtering if needed in the future.
+  **Tradeoff**: Filtering on metadata requires `metadata->>'key' = 'value'` JSON path queries rather than indexed column lookups. For high-cardinality filters a separate column or GIN index on metadata is required.
+
 ---
 
 ## Scaling concerns
 
-- **O(n) search**: `InMemoryVectorStore.search` computes cosine similarity against every stored vector. At 10 000 vectors this is fast; at 1 000 000 vectors it is completely impractical. The threshold for switching to an approximate nearest-neighbour backend (FAISS, Weaviate, pgvector HNSW) is roughly 10 000–50 000 vectors depending on latency requirements.
-- **Memory footprint**: Each stored vector of dimension `d` costs approximately `8d` bytes (Python float is 8 bytes) plus dict and object overhead. At 1 536 dimensions (OpenAI ada-002), one million vectors cost approximately 12 GB in pure Python lists.
-- **Concurrency**: `InMemoryVectorStore` is not thread-safe. Concurrent upsert and search operations on the same instance can produce incorrect results. Thread safety requires either a lock or a dedicated thread-safe data structure.
-- **No persistence**: `InMemoryVectorStore` loses all data on process exit. All production use cases require a persistent backend.
+- **InMemoryVectorStore — O(n) search**: Search computes cosine similarity against every stored vector. At 10 000 vectors this is fast; at 1 000 000 vectors it is completely impractical. Threshold for switching to an ANN backend is roughly 10 000–50 000 vectors depending on latency requirements.
+- **InMemoryVectorStore — memory**: Each stored vector of dimension `d` costs ~`8d` bytes (Python float). At 1 536 dimensions (OpenAI ada-002), one million vectors cost ~12 GB in pure Python lists.
+- **InMemoryVectorStore — no persistence**: All data is lost on process exit. All production use cases require a persistent backend.
+- **FAISSVectorStore — O(n) rebuild**: The FAISS index is rebuilt in full from `_data` on every search after any mutation. Acceptable up to ~100 000 vectors; beyond that, rebuild time exceeds acceptable latency. Mitigation: batch writes, then query; or switch to a database-backed store.
+- **FAISSVectorStore — memory**: FAISS flat index stores all vectors in RAM (32-bit floats). 1 million × 1 536 dims ≈ 6 GB. For very large corpora, IVF or PQ quantisation reduces memory but requires the `faiss-gpu` build or a dedicated vector service.
+- **FAISSVectorStore — concurrency**: Not thread-safe. Concurrent mutation and search require external locking.
+- **PgVectorStore — IVFFlat recall**: IVFFlat uses approximate nearest-neighbour search; recall depends on `lists` and the query-time `probes` parameter. Default `lists = 100` is appropriate for corpora of ~1 million vectors; adjust to `sqrt(n)` for best recall/speed trade-off.
+- **PgVectorStore — connection management**: The store does not pool connections. For concurrent serving, use a connection pool (e.g. `psycopg_pool`) and create one `PgVectorStore` per connection, or redesign to accept a pool.
+- **PgVectorStore — metadata filtering**: Metadata is stored as JSONB. Filtering on metadata (e.g. `WHERE metadata->>'source' = 'wiki'`) is not exposed through the `VectorStore` protocol. If pre-search metadata filtering is required, execute a raw SQL query before calling `search`, or extend the protocol with a `filters` parameter.
+- **All implementations — concurrency**: None of the implementations serialise concurrent access. Wrap in a lock or use connection pools (pgvector) for concurrent production workloads.
 
 ---
 
 ## Future improvements
 
-- **FAISS adapter**: Add a `FaissVectorStore` in the `rag` optional extra that wraps a FAISS `IndexFlatIP` (inner product / cosine on normalised vectors) or `IndexHNSWFlat` for approximate search.
-- **pgvector adapter**: Add a `PgVectorStore` that uses `asyncpg` or `psycopg3` to store vectors in PostgreSQL with the `pgvector` extension, enabling persistent storage with full SQL metadata filtering.
-- **Weaviate / Chroma adapters**: Add adapters for managed vector database services with native metadata filtering, authentication, and horizontal scaling.
-- **Bulk upsert**: Add an `upsert_batch(entries: list[tuple[str, list[float], dict]]) -> None` method to the protocol for efficient bulk loading, which most production backends support natively.
-- **Dimension enforcement**: Store the expected dimension at construction time and validate every upserted vector, raising a descriptive error on mismatch rather than silently computing wrong similarity scores.
+- **HNSW index in PgVectorStore**: Replace IVFFlat with an HNSW index (`USING hnsw (embedding vector_cosine_ops)`) for faster approximate search with better recall at low `probes`. Requires pgvector ≥ 0.5. Make the index type configurable at construction time.
+- **Async PgVectorStore**: Add `AsyncPgVectorStore` using `psycopg` async API (`await conn.execute(...)`) for use in async serving paths without blocking the event loop.
+- **PgVectorStore metadata filtering**: Extend `search` with an optional `filters: dict[str, Any]` parameter that appends `WHERE metadata @> %s::jsonb` to the query for pre-search filtering. This would require a protocol extension or a subclass.
+- **PgVectorStore connection pool**: Accept a `psycopg_pool.ConnectionPool` in addition to a bare connection, and acquire/release connections per operation for concurrent workloads.
+- **Weaviate / Chroma adapters**: Add adapters for managed vector database services with native metadata filtering, multi-tenancy, authentication, and horizontal scaling.
+- **Bulk upsert**: Add an `upsert_batch(entries: list[tuple[str, list[float], dict]]) -> None` method to the protocol for efficient bulk loading. PostgreSQL COPY, FAISS `index.add(matrix)`, and Weaviate batch APIs all support bulk ingestion with far lower overhead than sequential upsert.
+- **FAISSVectorStore HNSW mode**: Add a `metric` parameter to `FAISSVectorStore` (default `"cosine"`, option `"l2"`) and switch to `IndexHNSWFlat` for approximate search when exact search latency is unacceptable at scale.
 
 ---
 
@@ -200,4 +276,49 @@ removed = store.delete("a")
 assert removed is True
 assert "a" not in store
 assert store.delete("a") is False  # already gone
+```
+
+**FAISS adapter (requires `rag` extra):**
+
+```python
+from llm_agents.rag.vector_store import FAISSVectorStore
+
+store = FAISSVectorStore()
+store.upsert("doc1", [1.0, 0.0, 0.0], {"text": "first"})
+store.upsert("doc2", [0.0, 1.0, 0.0], {"text": "second"})
+
+results = store.search([1.0, 0.0, 0.0], top_k=1)
+print(results[0].doc_id, results[0].score)  # doc1  1.0
+```
+
+Vectors are L2-normalised before insertion and at query time; inner-product search is equivalent to cosine similarity.
+
+**PostgreSQL pgvector adapter (requires `pgvector` extra and a running server):**
+
+```python
+import psycopg
+from llm_agents.rag.vector_store import PgVectorStore
+
+conn = psycopg.connect("postgresql://localhost/mydb")
+store = PgVectorStore(conn, table="rag_docs", dimensions=1536)
+
+# first upsert creates the table, extension, and index
+store.upsert("doc1", embedding_vector, {"source": "wiki", "page": 42})
+
+results = store.search(query_embedding, top_k=5)
+for r in results:
+    print(r.doc_id, round(r.score, 3), r.metadata["source"])
+```
+
+**Swapping backends transparently (protocol-driven):**
+
+```python
+from llm_agents.rag.vector_store import VectorStore, InMemoryVectorStore
+
+def build_index(store: VectorStore, docs: list[tuple[str, list[float]]]) -> None:
+    for doc_id, vec in docs:
+        store.upsert(doc_id, vec)
+
+# Works identically with InMemoryVectorStore, FAISSVectorStore, or PgVectorStore
+build_index(InMemoryVectorStore(), [("a", [1.0, 0.0]), ("b", [0.0, 1.0])])
 ```
