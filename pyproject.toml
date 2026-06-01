@@ -62,6 +62,10 @@ elasticsearch = [
 openai = [
     "openai>=1.0",
 ]
+# Cohere embeddings API adapter.
+cohere = [
+    "cohere>=5.0",
+]
 # Data connectors and document parsers for ingestion.
 data = [
     "psycopg[binary]>=3.2",

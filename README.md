@@ -310,7 +310,7 @@ FineTuneResult(model_path, metrics, run_id, artifact_uri)
 
 | Subsystem | Package | Responsibility | Doc |
 |---|---|---|---|
-| Embeddings | `rag/embeddings/` | `Embedder` protocol; `FakeEmbedder`, `BatchEmbedder`, `SentenceTransformerEmbedder` (`rag`), `OpenAIEmbedder` (`openai`) | [embeddings](docs/rag/embeddings.md) |
+| Embeddings | `rag/embeddings/` | `Embedder` protocol; `FakeEmbedder`, `BatchEmbedder`, `SentenceTransformerEmbedder` (`rag`), `OpenAIEmbedder` (`openai`), `CohereEmbedder` (`cohere`) | [embeddings](docs/rag/embeddings.md) |
 | Vector store | `rag/vector_store/` | Cosine-similarity search; `InMemoryVectorStore`, `FAISSVectorStore`, `PgVectorStore`, `WeaviateVectorStore`, `ChromaVectorStore`, `ElasticsearchVectorStore` | [vector_store](docs/rag/vector_store.md) |
 | Indexing | `rag/indexing/` | chunk → MD5 dedup → batch embed → upsert | [indexing](docs/rag/indexing.md) |
 | Retrieval | `rag/retrieval/` | Dense passage retrieval with metadata filtering | [retrieval](docs/rag/retrieval.md) |
@@ -370,7 +370,7 @@ llm_agents_system/
       ingestion/                  IngestionPipeline, IngestionReport
     rag/
       embeddings/                 Embedder (Protocol), FakeEmbedder, BatchEmbedder,
-                                  SentenceTransformerEmbedder, OpenAIEmbedder
+                                  SentenceTransformerEmbedder, OpenAIEmbedder, CohereEmbedder
       vector_store/               VectorStore (Protocol), InMemoryVectorStore, FAISSVectorStore,
                                   PgVectorStore, WeaviateVectorStore, ChromaVectorStore,
                                   ElasticsearchVectorStore, SearchResult
@@ -398,7 +398,7 @@ llm_agents_system/
       benchmarking/               BenchmarkTask, Suite, BenchmarkRunner, BenchmarkReport
       hallucination/              HallucinationReport, HallucinationDetector (Protocol), OverlapDetector, LLMJudgeDetector
     config.py                     typed runtime settings (env + configs/)
-  tests/unit/                     mirrors src/ — one test file per module (938 passing with --extra dev --extra rag --extra serving)
+  tests/unit/                     mirrors src/ — one test file per module (965 passing with --extra dev --extra rag --extra serving)
   docs/                           per-module documentation
     index.md                      system overview, layer diagram, all flow diagrams
     infra/                        6 module docs
@@ -509,9 +509,9 @@ store (a noted future improvement).
 ## Implementation status
 
 All 30 modules are implemented and tested.  Five external vector-store adapters (FAISS,
-pgvector, Weaviate, Chroma, Elasticsearch) and two embedder adapters (SentenceTransformer,
-OpenAI) add a further 279 tests on top of the 30-module baseline.  The test suite has
-**938 tests passing** with `uv sync --extra dev --extra rag --extra serving` (0 skipped).
+pgvector, Weaviate, Chroma, Elasticsearch) and three embedder adapters (SentenceTransformer,
+OpenAI, Cohere) add a further 306 tests on top of the 30-module baseline.  The test suite has
+**965 tests passing** with `uv sync --extra dev --extra rag --extra serving` (0 skipped).
 
 | Layer | Modules | Status |
 |---|---|---|
@@ -572,7 +572,7 @@ uv run python -m llm_agents.evaluation.benchmarking --suite <name>
 
 ## Future improvements
 
-- CohereEmbedder provider adapter behind a `cohere` optional extra.
+- Concrete model-hub adapters for HuggingFace and GGUF (llama.cpp / vLLM).
 - Concrete model-hub adapters for HuggingFace and GGUF (llama.cpp / vLLM).
 - NeMo Guardrails adapter behind `guardrails`.
 - PEFT / QLoRA fine-tuning implementation behind the `training` extra (current FineTuner
@@ -594,7 +594,7 @@ Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/).
 # Install project + dev dependencies (light — no heavy ML/RAG deps)
 uv sync --extra dev --extra rag --extra serving
 
-# Run the full test suite (938 passing)
+# Run the full test suite (965 passing)
 uv run pytest
 
 # Run with short tracebacks and quiet output
@@ -622,6 +622,7 @@ uv sync --extra weaviate          # Weaviate HNSW adapter (weaviate-client>=4.6;
 uv sync --extra chroma            # Chroma HNSW adapter (chromadb>=0.5; embedded or server mode)
 uv sync --extra elasticsearch     # Elasticsearch 8+ knn adapter (elasticsearch>=8.0; needs running ES)
 uv sync --extra openai            # OpenAI embeddings API adapter (openai>=1.0)
+uv sync --extra cohere            # Cohere embeddings API adapter (cohere>=5.0)
 uv sync --extra local-inference   # llama.cpp / vLLM local model backends
 uv sync --extra training          # transformers + PEFT + MLflow fine-tuning
 uv sync --extra serving           # FastAPI + uvicorn
@@ -655,7 +656,7 @@ subclassing.  The table below lists the primary imports per layer.
 | Layer | Import path | Key types | Docs |
 |---|---|---|---|
 | **rag** | `llm_agents.rag.pipeline` | `RagPipeline`, `GroundedAnswer` | [pipeline](docs/rag/pipeline.md) |
-| **rag** | `llm_agents.rag.embeddings` | `Embedder` (Protocol), `FakeEmbedder`, `BatchEmbedder`, `SentenceTransformerEmbedder`, `OpenAIEmbedder` | [embeddings](docs/rag/embeddings.md) |
+| **rag** | `llm_agents.rag.embeddings` | `Embedder` (Protocol), `FakeEmbedder`, `BatchEmbedder`, `SentenceTransformerEmbedder`, `OpenAIEmbedder`, `CohereEmbedder` | [embeddings](docs/rag/embeddings.md) |
 | **rag** | `llm_agents.rag.vector_store` | `VectorStore` (Protocol), `InMemoryVectorStore`, `FAISSVectorStore`, `PgVectorStore`, `WeaviateVectorStore`, `ChromaVectorStore`, `ElasticsearchVectorStore`, `SearchResult` | [vector_store](docs/rag/vector_store.md) |
 | **rag** | `llm_agents.rag.indexing` | `Indexer`, `IndexReport` | [indexing](docs/rag/indexing.md) |
 | **rag** | `llm_agents.rag.retrieval` | `DenseRetriever`, `RetrievedPassage` | [retrieval](docs/rag/retrieval.md) |

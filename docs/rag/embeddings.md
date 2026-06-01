@@ -2,7 +2,7 @@
 
 ## Overview
 
-The embeddings module converts text strings into fixed-dimensional float vectors that encode semantic meaning. These vectors are the foundation of the entire RAG layer: without them, neither the vector store nor the retriever can operate. The module defines the `Embedder` structural protocol, a `FakeEmbedder` for deterministic testing, a `BatchEmbedder` wrapper that transparently batches large text lists, a `SentenceTransformerEmbedder` for local model inference (requires the `rag` extra), and an `OpenAIEmbedder` for the OpenAI embeddings API via an injected client (requires the `openai` extra).
+The embeddings module converts text strings into fixed-dimensional float vectors that encode semantic meaning. These vectors are the foundation of the entire RAG layer: without them, neither the vector store nor the retriever can operate. The module defines the `Embedder` structural protocol, a `FakeEmbedder` for deterministic testing, a `BatchEmbedder` wrapper that transparently batches large text lists, a `SentenceTransformerEmbedder` for local model inference (requires the `rag` extra), an `OpenAIEmbedder` for the OpenAI embeddings API via an injected client (requires the `openai` extra), and a `CohereEmbedder` for the Cohere embeddings API via an injected client (requires the `cohere` extra).
 
 ---
 
@@ -15,6 +15,7 @@ The embeddings module converts text strings into fixed-dimensional float vectors
 | `BatchEmbedder` | class | Wraps any `Embedder` and splits large text lists into fixed-size batches. |
 | `SentenceTransformerEmbedder` | class | Local inference via `sentence-transformers`; requires the `rag` extra. |
 | `OpenAIEmbedder` | class | OpenAI embeddings API via injected client; requires the `openai` extra. |
+| `CohereEmbedder` | class | Cohere embeddings API via injected client; requires the `cohere` extra. |
 
 ### `Embedder` Protocol
 
@@ -106,6 +107,32 @@ Requires an injected OpenAI-compatible client; `openai` is never imported by thi
 models). If omitted, `dimensions` is inferred from the first response and raises `ValueError`
 if read before any `embed()` call.
 
+### `CohereEmbedder`
+
+```python
+class CohereEmbedder:
+    def __init__(
+        self,
+        client,
+        model: str = "embed-english-v3.0",
+        *,
+        input_type: str = "search_document",
+        dimensions: int | None = None,
+    ) -> None: ...
+    def embed(self, texts: list[str]) -> list[list[float]]: ...
+
+    @property
+    def dimensions(self) -> int: ...  # raises ValueError if unknown
+
+    model:      str  # Cohere model name
+    input_type: str  # forwarded to every embed() call
+```
+
+Requires an injected Cohere client; `cohere` is never imported by this module.
+`input_type` is required by Cohere v3+ models and distinguishes indexing-time document vectors
+(`"search_document"`) from query-time vectors (`"search_query"`).  `dimensions` is inferred
+from the first response when omitted and raises `ValueError` if read before then.
+
 ---
 
 ## Architecture
@@ -124,6 +151,7 @@ if read before any `embed()` call.
       |
       +---> SentenceTransformerEmbedder  (rag extra, local inference)
       +---> OpenAIEmbedder               (openai extra, injected client)
+      +---> CohereEmbedder               (cohere extra, injected client)
       +---> FakeEmbedder                 (built-in, deterministic, for tests)
       +---> <any class with dimensions + embed()>
 ```
@@ -157,6 +185,8 @@ The embedder is consumed in two places: by the `Indexer` (to embed document chun
 **`SentenceTransformerEmbedder`** wraps `sentence_transformers.SentenceTransformer` with lazy model loading. The model is only instantiated on the first call to `embed()` or `dimensions`, so the module is importable without the extra installed. `dimensions` is cached after the first access. `normalize_embeddings=True` (default) ensures vectors are L2-normalised so cosine similarity equals dot product.
 
 **`OpenAIEmbedder`** takes an injected client and never imports `openai` itself. `dimensions` can be supplied at construction time (forwarded to the API for Matryoshka-style truncation on `text-embedding-3-*` models) or inferred from the first response. Accessing `dimensions` before any `embed()` call without a constructor value raises `ValueError`.
+
+**`CohereEmbedder`** takes an injected client and never imports `cohere` itself. `input_type` is forwarded on every call — use `"search_document"` when embedding corpus chunks and `"search_query"` when embedding retrieval queries (both required by Cohere v3+ models for asymmetric search). `dimensions` follows the same lazy-inference pattern as `OpenAIEmbedder`.
 
 ---
 
@@ -200,7 +230,7 @@ The embedder is consumed in two places: by the `Indexer` (to embed document chun
 ## Future improvements
 
 - **Async embed interface**: Add an `AsyncEmbedder` protocol variant with `async def embed(...)` for provider API calls so they can be properly awaited without blocking the event loop.
-- **CohereEmbedder**: Add a `CohereEmbedder` adapter (client injection, same pattern as `OpenAIEmbedder`) behind a `cohere` optional extra.
+- **Asymmetric search helper**: `CohereEmbedder` requires the caller to manage `input_type` manually; a convenience wrapper that automatically sets `"search_document"` vs `"search_query"` based on context would reduce error surface.
 - **Dimension validation**: Add a runtime check in `Indexer` and `DenseRetriever` that the embedder's `dimensions` matches the vector store's expected dimension, raising a clear error at construction time rather than a cryptic shape mismatch later.
 - **Caching layer**: Add an optional `CachingEmbedder` wrapper that memoises vectors by text hash, avoiding redundant API calls for frequently recurring chunks.
 - **Retry + rate-limit logic**: `OpenAIEmbedder` currently makes a single API call. A production wrapper should add exponential back-off on 429/503 and respect per-minute token limits.
@@ -282,4 +312,23 @@ print(len(vectors[0]))       # 512
 embedder2 = OpenAIEmbedder(client)
 vectors2 = embedder2.embed(["test"])
 print(embedder2.dimensions)  # 1536 (text-embedding-3-small default)
+```
+
+**CohereEmbedder (provider API):**
+
+```python
+# Requires: pip install 'llm-agents-system[cohere]'
+import cohere
+from llm_agents.rag.embeddings import CohereEmbedder
+
+co = cohere.Client(api_key="...")
+
+# Index-time: use input_type="search_document"
+doc_embedder = CohereEmbedder(co, model="embed-english-v3.0", input_type="search_document")
+doc_vectors = doc_embedder.embed(["Paris is the capital of France.", "Dogs are great."])
+print(doc_embedder.dimensions)   # inferred from response (e.g. 1024)
+
+# Query-time: use input_type="search_query"
+query_embedder = CohereEmbedder(co, model="embed-english-v3.0", input_type="search_query")
+query_vector = query_embedder.embed(["capital of France"])[0]
 ```

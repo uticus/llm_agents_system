@@ -1,7 +1,7 @@
 """Embeddings: text embedding via sentence-transformers or provider embeddings.
 
 Behind an ``Embedder`` interface.  Local models require the ``rag`` extra;
-provider adapters require the corresponding extra (``openai``).
+provider adapters require the corresponding extra (``openai``, ``cohere``).
 
 Public surface
 --------------
@@ -10,8 +10,10 @@ Public surface
 - :class:`BatchEmbedder` — wraps any Embedder and batches calls.
 - :class:`SentenceTransformerEmbedder` — local inference via sentence-transformers (``rag`` extra).
 - :class:`OpenAIEmbedder` — OpenAI embeddings API via injected client (``openai`` extra).
+- :class:`CohereEmbedder` — Cohere embeddings API via injected client (``cohere`` extra).
 """
 
+from llm_agents.rag.embeddings._cohere_embedder import CohereEmbedder
 from llm_agents.rag.embeddings._embedder import BatchEmbedder, Embedder, FakeEmbedder
 from llm_agents.rag.embeddings._openai_embedder import OpenAIEmbedder
 from llm_agents.rag.embeddings._sentence_transformer_embedder import (
@@ -20,6 +22,7 @@ from llm_agents.rag.embeddings._sentence_transformer_embedder import (
 
 __all__ = [
     "BatchEmbedder",
+    "CohereEmbedder",
     "Embedder",
     "FakeEmbedder",
     "OpenAIEmbedder",
