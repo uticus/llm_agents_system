@@ -60,12 +60,21 @@ class IngestionPipeline:
 ```python
 class DeduplicationStore(Protocol):
     def add(self, hash: str) -> None: ...
+    def add_batch(self, hashes: list[str]) -> None: ...
     def __contains__(self, hash: str) -> bool: ...
     def reset(self) -> None: ...
     def __len__(self) -> int: ...
 ```
 
-`runtime_checkable` — `isinstance(obj, DeduplicationStore)` works at runtime for any object that implements all four methods.
+`runtime_checkable` — `isinstance(obj, DeduplicationStore)` works at runtime for any object that implements all five methods.
+
+| Method | Description |
+|---|---|
+| `add(hash)` | Record one hash as seen.  Idempotent. |
+| `add_batch(hashes)` | Record all hashes in one operation.  Empty list is a no-op.  `SQLiteDeduplicationStore` wraps all inserts in a single transaction. |
+| `__contains__(hash)` | Return `True` if the hash has been recorded since the last `reset`. |
+| `reset()` | Clear all stored hashes. |
+| `__len__()` | Return the number of distinct hashes stored. |
 
 ### `InMemoryDeduplicationStore`
 

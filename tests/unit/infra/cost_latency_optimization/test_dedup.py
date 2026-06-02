@@ -226,3 +226,103 @@ class TestDeduplicationStoreProtocol:
 
     def test_plain_object_does_not_satisfy_protocol(self) -> None:
         assert not isinstance(object(), DeduplicationStore)
+
+
+# ---------------------------------------------------------------------------
+# T6: add_batch — InMemoryDeduplicationStore
+# ---------------------------------------------------------------------------
+
+
+class TestInMemoryDeduplicationStoreAddBatch:
+    def test_add_batch_empty_is_noop(self) -> None:
+        store = InMemoryDeduplicationStore()
+        store.add_batch([])
+        assert len(store) == 0
+
+    def test_add_batch_single(self) -> None:
+        store = InMemoryDeduplicationStore()
+        store.add_batch(["h1"])
+        assert "h1" in store
+        assert len(store) == 1
+
+    def test_add_batch_multiple(self) -> None:
+        store = InMemoryDeduplicationStore()
+        store.add_batch(["h1", "h2", "h3"])
+        assert "h1" in store
+        assert "h2" in store
+        assert "h3" in store
+        assert len(store) == 3
+
+    def test_add_batch_duplicates_within_list(self) -> None:
+        store = InMemoryDeduplicationStore()
+        store.add_batch(["h1", "h1", "h1"])
+        assert len(store) == 1
+
+    def test_add_batch_mixed_new_and_seen(self) -> None:
+        store = InMemoryDeduplicationStore()
+        store.add("h1")
+        store.add_batch(["h1", "h2"])
+        assert len(store) == 2
+        assert "h1" in store
+        assert "h2" in store
+
+    def test_add_batch_then_add_individually(self) -> None:
+        store = InMemoryDeduplicationStore()
+        store.add_batch(["h1", "h2"])
+        store.add("h3")
+        assert len(store) == 3
+
+
+# ---------------------------------------------------------------------------
+# T7: add_batch — SQLiteDeduplicationStore
+# ---------------------------------------------------------------------------
+
+
+class TestSQLiteDeduplicationStoreAddBatch:
+    def test_add_batch_empty_is_noop(self) -> None:
+        store = SQLiteDeduplicationStore(":memory:")
+        store.add_batch([])
+        assert len(store) == 0
+
+    def test_add_batch_single(self) -> None:
+        store = SQLiteDeduplicationStore(":memory:")
+        store.add_batch(["h1"])
+        assert "h1" in store
+        assert len(store) == 1
+
+    def test_add_batch_multiple(self) -> None:
+        store = SQLiteDeduplicationStore(":memory:")
+        store.add_batch(["h1", "h2", "h3"])
+        assert "h1" in store
+        assert "h2" in store
+        assert "h3" in store
+        assert len(store) == 3
+
+    def test_add_batch_duplicates_within_list(self) -> None:
+        store = SQLiteDeduplicationStore(":memory:")
+        store.add_batch(["h1", "h1", "h1"])
+        assert len(store) == 1
+
+    def test_add_batch_mixed_new_and_seen(self) -> None:
+        store = SQLiteDeduplicationStore(":memory:")
+        store.add("h1")
+        store.add_batch(["h1", "h2"])
+        assert len(store) == 2
+
+    def test_add_batch_persists_across_instance_recreation(self, tmp_path: Path) -> None:
+        db_path = tmp_path / "batch.db"
+        store1 = SQLiteDeduplicationStore(db_path)
+        store1.add_batch(["h1", "h2", "h3"])
+
+        store2 = SQLiteDeduplicationStore(db_path)
+        assert "h1" in store2
+        assert "h2" in store2
+        assert "h3" in store2
+        assert len(store2) == 3
+
+    def test_add_batch_empty_does_not_alter_db(self, tmp_path: Path) -> None:
+        db_path = tmp_path / "empty_batch.db"
+        store = SQLiteDeduplicationStore(db_path)
+        store.add("h1")
+        store.add_batch([])
+        assert len(store) == 1

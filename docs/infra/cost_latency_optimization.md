@@ -85,13 +85,22 @@ class Batcher
 ```python
 class DeduplicationStore(Protocol):  # @runtime_checkable
     def add(self, hash: str) -> None: ...
+    def add_batch(self, hashes: list[str]) -> None: ...
     def __contains__(self, hash: str) -> bool: ...
     def reset(self) -> None: ...
     def __len__(self) -> int: ...
 ```
 
-Any object that implements all four methods satisfies the protocol without inheritance.
+Any object that implements all five methods satisfies the protocol without inheritance.
 `isinstance(obj, DeduplicationStore)` works at runtime.
+
+| Method | Description |
+|---|---|
+| `add(hash)` | Record one hash.  Commits immediately in `SQLiteDeduplicationStore`. |
+| `add_batch(hashes)` | Record all hashes in one operation.  Empty list is a no-op.  `SQLiteDeduplicationStore` issues one `executemany` + one `commit`, regardless of list length. |
+| `__contains__(hash)` | Return `True` if hash has been added since the last `reset`. |
+| `reset()` | Clear all stored hashes. |
+| `__len__()` | Return the number of distinct hashes stored. |
 
 ### `InMemoryDeduplicationStore`
 
@@ -110,9 +119,10 @@ class SQLiteDeduplicationStore:
     def __init__(self, path: str | Path) -> None: ...
 ```
 
-Backed by a SQLite database file (stdlib `sqlite3`). Hashes are committed to disk on
-every `add()` call and survive process restarts. Pass `":memory:"` for an in-memory
-SQLite database (useful in tests that do not need persistence).
+Backed by a SQLite database file (stdlib `sqlite3`). `add()` commits one hash
+immediately. `add_batch()` wraps all inserts in a single transaction (one `commit`),
+reducing write latency from O(N) to O(1) for bulk workloads. Hashes survive process
+restarts. Pass `":memory:"` for an in-memory SQLite database (useful in tests).
 
 Raises `sqlite3.OperationalError` if the directory containing `path` does not exist.
 
@@ -190,7 +200,7 @@ Raises `sqlite3.OperationalError` if the directory containing `path` does not ex
 
 - **Decision:** `DeduplicationStore` is defined in this module, not in `data/` or `rag/`. **Why:** Both `data/ingestion` and `rag/indexing` need identical deduplication semantics; placing the Protocol here avoids a cross-subsystem dependency and aligns with the `infra` layer's role as a shared utility layer consumed by all higher layers. Both consumers re-export the three names from their own `__init__` for caller convenience. **Tradeoff:** A caller who only uses `IngestionPipeline` must transitively depend on `infra/cost_latency_optimization` even if they never use caching or batching, though this is a lightweight stdlib-only module.
 
-- **Decision:** `SQLiteDeduplicationStore.add()` commits after every single hash. **Why:** Guarantees that each `add()` call is immediately durable — a process crash between two `add()` calls will not lose the first hash. **Tradeoff:** N chunks per document means N SQLite commits, each involving an fsync-equivalent. A `add_batch()` method that wraps all inserts in a single transaction would be faster for bulk indexing at the cost of coarser durability granularity.
+- **Decision:** `SQLiteDeduplicationStore.add()` commits after every single hash; `add_batch()` commits once for the whole list. **Why:** `add()` guarantees per-hash durability — a crash loses at most the current hash. `add_batch()` provides O(1) commit cost for bulk workloads at the cost of coarser durability (if the process crashes mid-batch, none of the batch's hashes are recorded, so the entire batch is re-processed on retry — which is the safe failure mode). `Indexer` uses `add_batch` after all vector-store upserts succeed, ensuring the two writes are consistent. **Tradeoff:** Callers who need per-hash durability (e.g. streaming one chunk at a time across a network boundary) should use `add()` directly.
 
 ---
 
@@ -223,8 +233,6 @@ Raises `sqlite3.OperationalError` if the directory containing `path` does not ex
 - **Budget enforcement in BudgetTracker:** Add `cost_limit_usd: float` and `token_limit: int` thresholds with a `check_budget()` method that raises `BudgetExceededError` when a threshold is reached, allowing agents to self-limit automatically.
 
 - **Cache warming:** Add a `warm(pairs: list[tuple[LLMRequest, LLMResponse]])` method to `CompletionCache` that pre-populates the cache from a known set of request/response pairs, useful for seeding from a golden dataset.
-
-- **`DeduplicationStore.add_batch(hashes)`:** A single SQLite transaction for multiple hashes reduces write latency from O(N commits) to O(1) for bulk indexing workloads while preserving atomicity at the batch boundary.
 
 - **`SQLiteDeduplicationStore` connection lifecycle:** Add `close()`/`__enter__`/`__exit__` for deterministic file-handle release in long-running services and test harnesses.
 

@@ -33,6 +33,15 @@ class DeduplicationStore(Protocol):
         """Record *hash* as seen.  Idempotent: calling with an existing hash is a no-op."""
         ...
 
+    def add_batch(self, hashes: list[str]) -> None:
+        """Record every hash in *hashes* as seen in a single operation.
+
+        Semantically equivalent to calling :meth:`add` for each element, but
+        implementations may commit all inserts in one transaction.  Empty list
+        is a no-op.  Duplicate hashes within the list are silently ignored.
+        """
+        ...
+
     def __contains__(self, hash: str) -> bool:
         """Return ``True`` if *hash* has been added since the last :meth:`reset`."""
         ...
@@ -63,6 +72,10 @@ class InMemoryDeduplicationStore:
     def add(self, hash: str) -> None:
         """Record *hash* as seen."""
         self._hashes.add(hash)
+
+    def add_batch(self, hashes: list[str]) -> None:
+        """Record all hashes in *hashes* as seen.  Empty list is a no-op."""
+        self._hashes.update(hashes)
 
     def __contains__(self, hash: str) -> bool:  # type: ignore[override]
         """Return ``True`` if *hash* has been added since the last :meth:`reset`."""
@@ -104,6 +117,17 @@ class SQLiteDeduplicationStore:
     def add(self, hash: str) -> None:
         """Record *hash* as seen.  Commits immediately.  Idempotent."""
         self._conn.execute("INSERT OR IGNORE INTO hashes VALUES (?)", (hash,))
+        self._conn.commit()
+
+    def add_batch(self, hashes: list[str]) -> None:
+        """Record all hashes in *hashes* as seen in a single transaction.
+
+        Issues one ``executemany`` + one ``commit`` regardless of list length.
+        Empty list is a no-op — no database round-trip is made.
+        """
+        if not hashes:
+            return
+        self._conn.executemany("INSERT OR IGNORE INTO hashes VALUES (?)", [(h,) for h in hashes])
         self._conn.commit()
 
     def __contains__(self, hash: str) -> bool:  # type: ignore[override]

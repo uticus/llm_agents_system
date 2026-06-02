@@ -144,7 +144,7 @@ See [`data/ingestion` — Public API](../data/ingestion.md#public-api) for full 
 ## Scaling concerns
 
 - **Batch indexing throughput**: `index_batch` calls `index` sequentially. For large document sets, parallel indexing with a concurrency limit (e.g. using `asyncio.gather` with a semaphore) would substantially increase throughput.
-- **Memory** (in-memory store): `InMemoryDeduplicationStore` grows with every unique chunk indexed. At one million unique chunks (32-byte hex strings each), this is approximately 32 MB. For very long-running processes, `reset_dedup()` or instance rotation is needed. `SQLiteDeduplicationStore` offloads this to disk at the cost of one SQLite I/O per `add()` call.
+- **Memory** (in-memory store): `InMemoryDeduplicationStore` grows with every unique chunk indexed. At one million unique chunks (32-byte hex strings each), this is approximately 32 MB. For very long-running processes, `reset_dedup()` or instance rotation is needed. `SQLiteDeduplicationStore` offloads this to disk; `Indexer` calls `add_batch` once per document so the cost is one SQLite transaction per document, not one per chunk.
 - **Vector store write throughput**: Each chunk triggers one `vector_store.upsert` call. For `InMemoryVectorStore`, this is fast. For remote stores (pgvector, Weaviate), each call involves a network round-trip. A `upsert_batch` method on the vector store would dramatically reduce write latency.
 - **Chunker quality**: The default identity chunker produces one vector per document, which is appropriate only for short texts. For longer texts, retrieval precision degrades because a single large chunk is less topically focused than smaller ones. A fixed-size or sentence-boundary chunker is required for production.
 

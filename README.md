@@ -411,7 +411,7 @@ llm_agents_system/
                                   BUILTIN_SUITES, BUILTIN_AGENTS
       hallucination/              HallucinationReport, HallucinationDetector (Protocol), OverlapDetector, LLMJudgeDetector
     config.py                     typed runtime settings (env + configs/)
-  tests/unit/                     mirrors src/ — one test file per module (1342 passing with --extra dev --extra rag --extra serving)
+  tests/unit/                     mirrors src/ — one test file per module (1358 passing with --extra dev --extra rag --extra serving)
   docs/                           per-module documentation
     index.md                      system overview, layer diagram, all flow diagrams
     infra/                        6 module docs
@@ -526,7 +526,7 @@ All 30 modules are implemented and tested.  Five external vector-store adapters,
 embedder adapters, three model-hub backends, MLflow version tracking, the NeMo Guardrails
 adapter, the PEFT/QLoRA trainer factory, the MLflow/DVC/Delta Lake data-versioning
 integration, and the five concrete benchmark task suites add a further 641 tests on top
-of the 30-module baseline.  The test suite has **1342 tests passing** with
+of the 30-module baseline.  The test suite has **1358 tests passing** with
 `uv sync --extra dev --extra rag --extra serving` (0 skipped).
 
 | Layer | Modules | Status |
@@ -613,12 +613,6 @@ HotpotQA multi-hop; cost — mean USD per completed task; cache hit — fraction
   (raise an exception) before the router is ever invoked, with an optional soft-warning
   threshold (e.g. 80 %) that fires before the hard block.
 
-- **`DeduplicationStore` — batch add.** `SQLiteDeduplicationStore.add()` commits after
-  every single hash, which is correct for durability but expensive when indexing a large
-  document with many chunks (N commits per document). A `add_batch(hashes: list[str])`
-  method that wraps all inserts in one transaction would cut write latency from O(N) to
-  O(1) round-trips while preserving atomicity at the batch boundary.
-
 - **`SQLiteDeduplicationStore` — connection lifecycle.** There is no explicit `close()`
   or context-manager support; callers rely on GC to release the file handle. Adding
   `__enter__`/`__exit__`/`close()` would enable deterministic cleanup and make the store
@@ -672,7 +666,7 @@ Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/).
 # Install project + dev dependencies (light — no heavy ML/RAG deps)
 uv sync --extra dev --extra rag --extra serving
 
-# Run the full test suite (1342 passing)
+# Run the full test suite (1358 passing)
 uv run pytest
 
 # Run with short tracebacks and quiet output

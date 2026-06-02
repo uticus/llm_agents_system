@@ -154,6 +154,52 @@ class TestIndexerSQLitePersistence:
 
 
 # ---------------------------------------------------------------------------
+# S24: Indexer uses add_batch — hashes recorded atomically after all upserts
+# ---------------------------------------------------------------------------
+
+
+class TestIndexerAddBatch:
+    def test_index_records_all_chunk_hashes_via_add_batch(self) -> None:
+        """All chunk hashes for a document are recorded after indexing."""
+        store = InMemoryDeduplicationStore()
+        embedder = FakeEmbedder(dimensions=4)
+        vs = InMemoryVectorStore()
+        indexer = Indexer(embedder, vs, chunker=lambda t: t.split(), dedup_store=store)
+
+        report = indexer.index("d1", "a b c")
+        assert report.chunks_added == 3
+        assert report.chunks_skipped == 0
+        assert indexer.seen_count == 3
+
+    def test_index_skips_all_chunks_on_second_call(self) -> None:
+        """Re-indexing the same document skips every chunk (dedup via add_batch)."""
+        store = InMemoryDeduplicationStore()
+        embedder = FakeEmbedder(dimensions=4)
+        vs = InMemoryVectorStore()
+        indexer = Indexer(embedder, vs, chunker=lambda t: t.split(), dedup_store=store)
+
+        indexer.index("d1", "a b c")
+        assert embedder.embed_count == 1
+
+        report2 = indexer.index("d1", "a b c")
+        assert report2.chunks_skipped == 3
+        assert report2.chunks_added == 0
+        assert embedder.embed_count == 1  # embedder not called again
+
+    def test_index_partial_update_only_re_embeds_changed_chunks(self) -> None:
+        """When only some chunks change, only those are re-embedded."""
+        store = InMemoryDeduplicationStore()
+        embedder = FakeEmbedder(dimensions=4)
+        vs = InMemoryVectorStore()
+        indexer = Indexer(embedder, vs, chunker=lambda t: t.split(), dedup_store=store)
+
+        indexer.index("d1", "a b c")  # 3 chunks indexed
+        report2 = indexer.index("d1", "a b X")  # chunk "X" is new, "a" and "b" are seen
+        assert report2.chunks_added == 1
+        assert report2.chunks_skipped == 2
+
+
+# ---------------------------------------------------------------------------
 # Exports — importable from rag/indexing
 # ---------------------------------------------------------------------------
 

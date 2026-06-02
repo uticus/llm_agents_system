@@ -146,12 +146,14 @@ class Indexer:
             report.errors.append(f"{doc_id}: embed error — {exc}")
             return report
 
+        new_hashes: list[str] = []
         for (idx, _chunk, h), vector in zip(new_chunks, vectors, strict=False):
             chunk_id = _chunk_id(doc_id, idx)
             chunk_meta = {**meta, "doc_id": doc_id, "chunk_index": idx}
             self._vector_store.upsert(chunk_id, vector, metadata=chunk_meta)
-            self._dedup_store.add(h)
+            new_hashes.append(h)
             report.chunks_added += 1
+        self._dedup_store.add_batch(new_hashes)
 
         return report
 
